@@ -27,3 +27,4 @@ settings.toml
 # Local temporary folder
 .local
 /tools/pal/__pycache__/
+/JSRF.zip

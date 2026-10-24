@@ -52,13 +52,21 @@ The SDK supported XDK 4831 and 5849. JSRF was built with XDK **4134**, and this 
 - Entry points older titles call: `IDirectSound_AddRef/GetCaps/SetAllParameters`, the `IDirectSoundBuffer` cone,
   mode and factor setters, `XInputPoll`, the kernel's `NtUserIoApcDispatcher`; fixed function immediate mode.
 
+## Playing (release zip)
+
+1. Download `JSRF.zip` from the [releases](https://github.com/yacineolivier-maker/JSRF-PAL-Recomp/releases) and extract it.
+2. Put your **PAL** disc image (`.iso`) in the `assets` folder, or `default.xbe` with its `Media` folder.
+3. Run `JSRF.exe`. The first start translates and compiles the game's code from **your** copy (a few minutes,
+   with a progress window): no game code is distributed. Later starts are immediate.
+4. **F1** opens the options. Saves go to `hdd\` beside the exe.
+
 ## Building
 
 1. Visual Studio 2022 or later with **Desktop development with C++**, **C++ Clang tools for Windows** and
    **C++ CMake tools for Windows**.
-2. Put your game files in `assets`: `default.xbe` with the `Media` folder beside it (extract your disc image, e.g.
-   with [extract-xiso](https://github.com/XboxDev/extract-xiso), or `python tools/pal/xiso_extract.py image.iso assets`).
-3. Run `build.bat`. The first build recompiles the game; the exe is `out\build\release\JSRF.exe`.
+2. Put your game files in `assets`: the PAL `.iso`, or `default.xbe` with its `Media` folder (extract with
+   [extract-xiso](https://github.com/XboxDev/extract-xiso) or `python tools/pal/xiso_extract.py image.iso assets`).
+3. Run `build.bat` (`release.bat` makes the zip, without game code).
 
 ## Tools
 
@@ -88,4 +96,5 @@ américain) ; ses cinq langues sont disponibles.
 État : démarrage, logos, avertissement, écran titre, démo, nouvelle partie, scènes, dialogues et premiers pas en jeu
 à 60 fps en 1080p, musique et voix. Écran large Hor+ (interface gardée en 4:3), SMAA, netteté, panneau d'options F1,
 choix de la langue du disque PAL, clavier-souris en secours.
-Compilation : Visual Studio avec Clang et CMake, jeu extrait dans `assets`, puis `build.bat`.
+Jouer : extraire `JSRF.zip` (page Releases), mettre l'ISO PAL dans `assets`, lancer `JSRF.exe`. Le premier démarrage
+compile le code du jeu à partir de votre copie (quelques minutes) ; aucun code du jeu n'est distribué. F1 : options.
