@@ -365,6 +365,8 @@ KERNEL_EXPORT(217, NtQueryVirtualMemory, 2) {
 
 // XBE_WATCH_ADDR: the contiguous allocations and frees that cover the address, with the title's return address
 static bool CoversWatch(uint32_t va, uint32_t size) {
+    static const bool all = std::getenv("XBE_LOG_CONTIG") != nullptr;  // every allocation and free
+    if (all) return true;
     static const uint32_t w = std::getenv("XBE_WATCH_ADDR") ? uint32_t(std::strtoul(std::getenv("XBE_WATCH_ADDR"), nullptr, 16)) : 0;
     return w && va && w - va < size;
 }
@@ -383,7 +385,12 @@ KERNEL_EXPORT(171, MmFreeContiguousMemory, 1) {
     mem::FreeContiguous(a[0]);
     return 0;
 }
-KERNEL_EXPORT(173, MmGetPhysicalAddress, 1) { return mem::PhysicalFromVirtual(a[0]); }
+KERNEL_EXPORT(173, MmGetPhysicalAddress, 1) {
+    uint32_t phys = mem::PhysicalFromVirtual(a[0]);
+    if (CoversWatch(phys | 0x80000000u, 0x10000) || CoversWatch(a[0], 0x10000))
+        LOGI("watch: MmGetPhysicalAddress(%08X) = %08X from %08X", a[0], phys, R32(ctx.esp));
+    return phys;
+}
 KERNEL_EXPORT(178, MmPersistContiguousMemory, 3) { return 0; }
 KERNEL_EXPORT(175, MmLockUnlockBufferPages, 3) { return 0; }
 KERNEL_EXPORT(176, MmLockUnlockPhysicalPage, 2) { return 0; }
