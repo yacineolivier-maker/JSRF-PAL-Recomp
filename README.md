@@ -30,6 +30,8 @@ Early work in progress:
 - **Hor+ widescreen**: the game's 4:3 projection, focal length and frustum are widened to the output's aspect
   (16:9, 21:9…), while the 2D interface keeps its 4:3 proportions. Option `ecran_large`.
 - Any resolution, internal resolution up to 200 % (supersampling), SMAA, adaptive sharpening, anisotropic filtering.
+- Light and colour: soft bloom on luminance and colour grading (vibrance, gentle S-curve), applied to the 3D
+  scene only, before the 2D interface; subtle by default, tunable in F1.
 - 60 fps, vsync, frame cap; English, French, German, Spanish or Italian text and voices from the PAL disc
   (`langue` in `settings.toml`).
 - In-game options panel on **F1**, saved to `settings.toml`.
@@ -94,7 +96,7 @@ propre copie. Seule la version **PAL** est prise en charge (les autres portages 
 américain) ; ses cinq langues sont disponibles.
 
 État : démarrage, logos, avertissement, écran titre, démo, nouvelle partie, scènes, dialogues et premiers pas en jeu
-à 60 fps en 1080p, musique et voix. Écran large Hor+ (interface gardée en 4:3), SMAA, netteté, panneau d'options F1,
+à 60 fps en 1080p, musique et voix. Écran large Hor+ (interface gardée en 4:3), SMAA, netteté, halo lumineux et étalonnage des couleurs, panneau d'options F1,
 choix de la langue du disque PAL, clavier-souris en secours.
 Jouer : extraire `JSRF.zip` (page Releases), mettre l'ISO PAL dans `assets`, lancer `JSRF.exe`. Le premier démarrage
 compile le code du jeu à partir de votre copie (quelques minutes) ; aucun code du jeu n'est distribué. F1 : options.
