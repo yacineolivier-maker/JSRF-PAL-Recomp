@@ -26,6 +26,7 @@ CDevice_VertexShader      = 0x380  # D3DDevice_SelectVertexShader 0x190C99, D3DD
 CDevice_BackBufferScale   = 0x464  # D3DDevice_SetRenderTarget 0x18DC07 reads the X scale, 0x18DC01 the Y scale at +4
 CDevice_Viewport          = 0x9D0  # D3D_UpdateProjectionViewportTransform 0x18F48F to 0x18F4EA reads Width, Height, MinZ, MaxZ at +8..+0x14
 CDevice_ScreenSpaceOffset = 0x9E8  # D3DDevice_SetScreenSpaceOffset 0x18EE93 stores x, 0x18EEA3 y at +4
+CDevice_AutoDepth         = 0x2088 # D3D_InitDefaultState 0x1924D8 reads the auto depth buffer, enables Z when there is one
 CDevice_VBlankCallback    = 0x242C # 0x18D8FA stores it (XbSymbolDatabase m_VBlankCallback_OFFSET)
 CDevice_VBlankEvent       = 0x2430 # D3DDevice_BlockUntilVerticalBlank 0x18D91B clears its SignalState at +4
 CDevice_GammaRamps        = 0x247C # D3DDevice_SetGammaRamp 0x18D640 copies to +0x2268 + 0x214 + index * 0x300

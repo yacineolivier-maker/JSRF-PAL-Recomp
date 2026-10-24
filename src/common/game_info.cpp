@@ -1,4 +1,10 @@
 #include "app/app.h"
+#include "core/input.h"
+
+namespace game {
+void StartHangWatch();                     // hang_watch.cpp (repris de Conker)
+void AutoPad(int port, input::Pad& pad);  // autopad.cpp (repris de Conker)
+}
 
 // ce que le runtime demande au jeu ; les chaînes sont obligatoires, les hooks peuvent rester nuls
 const app::GameInfo app::kGame = {
@@ -13,11 +19,11 @@ const app::GameInfo app::kGame = {
     .options = {},
     .load = nullptr,
     .save = nullptr,
-    .init = nullptr,
+    .init = game::StartHangWatch,
     .loaded = nullptr,
     .window = nullptr,
     .message = nullptr,
     .ui = nullptr,
-    .pad = nullptr,
+    .pad = game::AutoPad,
     .rumble = nullptr,
 };

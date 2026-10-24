@@ -800,7 +800,7 @@ crt_tan                                              = 0
 D3D_BlockOnNonSurfaceResource                        = 0
 D3D_BlockOnResource                                  = 0x1921F0  # XbSymbolDatabase
 D3D_BlockOnTime                                      = 0x191F00  # XbSymbolDatabase
-D3D_InitDefaultState                                 = 0
+D3D_InitDefaultState                                 = 0x192480  # identités (SetTransform x10), états 0x39.. de la table 0x19B080, ZENABLE selon +0x2088, COLOROP[0]=4
 D3D_InternalAddRef                                   = 0x1933D0
 D3D_InternalRelease                                  = 0x1934D0
 D3D_KickOffAndWaitForIdle                            = 0x1921D0  # XbSymbolDatabase
