@@ -285,7 +285,9 @@ uint64_t MemSig(uint32_t data, uint32_t total) {
     uint64_t sig = Hash(&total, sizeof(total));
     g_perf.sigs++;
     g_perf.sig_bytes += total <= kSigWholeMax ? total : kSigSamples * kSigSampleBytes;
-    if (total <= kSigWholeMax) return Hash(p, total, sig);
+    // XBE_SIG_FULL: every byte of every texture, for titles that write into part of a big texture without a lock
+    static const bool full = std::getenv("XBE_SIG_FULL") != nullptr;
+    if (total <= kSigWholeMax || full) return Hash(p, total, sig);
     for (uint32_t i = 0; i < kSigSamples; i++) {
         const uint8_t* sample = p + uint64_t(total - kSigSampleBytes) * i / (kSigSamples - 1);
         sig = Hash(sample, kSigSampleBytes, sig);

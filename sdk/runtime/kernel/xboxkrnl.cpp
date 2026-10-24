@@ -363,9 +363,23 @@ KERNEL_EXPORT(217, NtQueryVirtualMemory, 2) {
     return kSuccess;
 }
 
-KERNEL_EXPORT(165, MmAllocateContiguousMemory, 1) { return mem::AllocContiguous(a[0], 0, 0xFFFFFFFF, 0); }
-KERNEL_EXPORT(166, MmAllocateContiguousMemoryEx, 5) { return mem::AllocContiguous(a[0], a[1], a[2], a[3]); }
+// XBE_WATCH_ADDR: the contiguous allocations and frees that cover the address, with the title's return address
+static bool CoversWatch(uint32_t va, uint32_t size) {
+    static const uint32_t w = std::getenv("XBE_WATCH_ADDR") ? uint32_t(std::strtoul(std::getenv("XBE_WATCH_ADDR"), nullptr, 16)) : 0;
+    return w && va && w - va < size;
+}
+KERNEL_EXPORT(165, MmAllocateContiguousMemory, 1) {
+    uint32_t va = mem::AllocContiguous(a[0], 0, 0xFFFFFFFF, 0);
+    if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemory(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
+    return va;
+}
+KERNEL_EXPORT(166, MmAllocateContiguousMemoryEx, 5) {
+    uint32_t va = mem::AllocContiguous(a[0], a[1], a[2], a[3]);
+    if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemoryEx(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
+    return va;
+}
 KERNEL_EXPORT(171, MmFreeContiguousMemory, 1) {
+    if (CoversWatch(a[0], mem::AllocationSize(a[0]))) LOGI("watch: MmFreeContiguousMemory(%08X) from %08X", a[0], R32(ctx.esp));
     mem::FreeContiguous(a[0]);
     return 0;
 }

@@ -1393,7 +1393,32 @@ void EndPrimitive() {
     uint32_t prim = g_im_prim, count = uint32_t(g_im_vertices.size() / 64), handle = g_state.vs_handle;
     g_im_prim = 0;
     if (!prim || !count) return;
-    if (!(handle & 1) && (handle & 0xE) == 4) LOG_FIRST(1, "d3d: pretransformed immediate mode vertices are not supported");
+    // the fixed pipeline (an FVF, pretransformed or not): the slots packed in the FVF's own layout and drawn as
+    // DrawVerticesUP would, colours back to D3DCOLOR from the bytes the walk spread (XDK 4134 titles draw text so)
+    if (!(handle & 1)) {
+        static std::vector<uint8_t> fvf_data;
+        gpu::VertexShader fvf;
+        gpu::FvfInputs(handle, fvf);
+        uint32_t stride = fvf.stream_stride[0];
+        if (!stride) return;
+        fvf_data.assign(size_t(count) * stride, 0);
+        for (uint32_t v = 0; v < count; v++)
+            for (uint32_t r = 0; r < 16; r++) {
+                const auto& in = fvf.inputs[r];
+                if (!in.type) continue;
+                const float* src = &g_im_vertices[v * 64 + r * 4];
+                uint8_t* dst = &fvf_data[size_t(v) * stride + in.offset];
+                if (in.type == 0x40) {
+                    uint32_t c = 0;
+                    for (int k = 0; k < 4; k++) c |= uint32_t(std::clamp(src[k], 0.0f, 1.0f) * 255.0f + 0.5f) << (k * 8);
+                    std::memcpy(dst, &c, 4);
+                } else {
+                    std::memcpy(dst, src, (in.type >> 4) * 4);
+                }
+            }
+        DrawUp(prim, count, fvf_data.data(), stride);
+        return;
+    }
     auto bound = g_state.vs, from = handle & 1 ? bound : nullptr;
     Made& m = made[{from.get(), g_im_mask}];
     if (!m.vs) {
