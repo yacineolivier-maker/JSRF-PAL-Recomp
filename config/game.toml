@@ -11,6 +11,17 @@ code_sections = [".text", "D3D", "DSOUND", "MMATRIX", "XGRPH", "XPP"]
 
 # extra entry points
 [functions]
+# tools.disasm (seeded run) entries the recompiler still lacked
+0x3B040 = ""
+0x3BFD5 = ""
+0x43010 = ""
+0x54F10 = ""
+0x758EE = ""
+0x93AE0 = ""
+0xA6400 = ""
+0x152B83 = ""
+0x170B9F = ""
+0x170BB7 = ""
 # functions xboxrecomp's tools.disasm finds in the PAL default.xbe and the scan does not
 0x11105 = ""  # tools.disasm
 0x13C68 = ""  # tools.disasm
