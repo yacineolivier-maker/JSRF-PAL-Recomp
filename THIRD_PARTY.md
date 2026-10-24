@@ -10,3 +10,7 @@
   [XbSymbolDatabase](https://github.com/Cxbx-Reloaded/XbSymbolDatabase) (MIT), run on the user's own copy.
 - The NTSC function list of [Miggas/JSRF-Recomp](https://github.com/Miggas/JSRF-Recomp) (MIT) was mapped to the PAL
   executable by `tools/pal/ntsc_pal_map.py` (addresses only).
+- **SMAA** (Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez, MIT):
+  `src/common/smaa_shader.h` and `src/common/smaa_textures.h`, license in the header of `smaa_shader.h`.
+- `src/common/` options panel, render extension, keyboard and mouse, diagnostics: from
+  [ConkerLR-Recomp](https://github.com/yacineolivier-maker/ConkerLR-Recomp) (same author, MIT).
