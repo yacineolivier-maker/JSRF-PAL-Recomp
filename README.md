@@ -34,7 +34,7 @@ The addresses in `config/game.toml` belong to this executable.
 ## XDK 4134
 
 The SDK supported XDK 4831 and 5849. JSRF was built with XDK **4134**, and this repository adds what that needed
-(in `sdk/`, meant to go upstream):
+(in `sdk/`, proposed upstream in [TGP482/XboxXBERecomp#14](https://github.com/TGP482/XboxXBERecomp/pull/14)):
 
 - `sdk/xdk/4134/layout.toml`: the D3D device, XAPI and DSP image layouts, each value tied to the code that proves it.
 - The 4134 render state numbering (146 states, no unused slots), translated to the 4831/5849 one the renderer keeps.
