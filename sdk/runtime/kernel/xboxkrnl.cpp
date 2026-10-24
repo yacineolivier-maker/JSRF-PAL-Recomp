@@ -364,13 +364,6 @@ KERNEL_EXPORT(217, NtQueryVirtualMemory, 2) {
     return kSuccess;
 }
 
-// XBE_WATCH_ADDR: the contiguous allocations and frees that cover the address, with the title's return address
-static bool CoversWatch(uint32_t va, uint32_t size) {
-    static const bool all = std::getenv("XBE_LOG_CONTIG") != nullptr;  // every allocation and free
-    if (all) return true;
-    static const uint32_t w = std::getenv("XBE_WATCH_ADDR") ? uint32_t(std::strtoul(std::getenv("XBE_WATCH_ADDR"), nullptr, 16)) : 0;
-    return w && va && w - va < size;
-}
 // a library that takes physical addresses with a retail console's 64 MB mask (XDK 4134's D3DResource_Register and
 // texture creation) needs the title's contiguous memory below it; the host's own buffers may still go higher
 #ifdef XDK_ContiguousLimit
@@ -378,27 +371,15 @@ constexpr uint32_t kGuestHighest = XDK_ContiguousLimit - 1;
 #else
 constexpr uint32_t kGuestHighest = 0xFFFFFFFF;
 #endif
-KERNEL_EXPORT(165, MmAllocateContiguousMemory, 1) {
-    uint32_t va = mem::AllocContiguous(a[0], 0, kGuestHighest, 0);
-    if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemory(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
-    return va;
-}
+KERNEL_EXPORT(165, MmAllocateContiguousMemory, 1) { return mem::AllocContiguous(a[0], 0, kGuestHighest, 0); }
 KERNEL_EXPORT(166, MmAllocateContiguousMemoryEx, 5) {
-    uint32_t va = mem::AllocContiguous(a[0], a[1], std::min(a[2], kGuestHighest), a[3]);
-    if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemoryEx(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
-    return va;
+    return mem::AllocContiguous(a[0], a[1], std::min(a[2], kGuestHighest), a[3]);
 }
 KERNEL_EXPORT(171, MmFreeContiguousMemory, 1) {
-    if (CoversWatch(a[0], mem::AllocationSize(a[0]))) LOGI("watch: MmFreeContiguousMemory(%08X) from %08X", a[0], R32(ctx.esp));
     mem::FreeContiguous(a[0]);
     return 0;
 }
-KERNEL_EXPORT(173, MmGetPhysicalAddress, 1) {
-    uint32_t phys = mem::PhysicalFromVirtual(a[0]);
-    if (CoversWatch(phys | 0x80000000u, 0x10000) || CoversWatch(a[0], 0x10000))
-        LOGI("watch: MmGetPhysicalAddress(%08X) = %08X from %08X", a[0], phys, R32(ctx.esp));
-    return phys;
-}
+KERNEL_EXPORT(173, MmGetPhysicalAddress, 1) { return mem::PhysicalFromVirtual(a[0]); }
 KERNEL_EXPORT(178, MmPersistContiguousMemory, 3) { return 0; }
 KERNEL_EXPORT(175, MmLockUnlockBufferPages, 3) { return 0; }
 KERNEL_EXPORT(176, MmLockUnlockPhysicalPage, 2) { return 0; }
@@ -698,8 +679,6 @@ KERNEL_EXPORT(158, KeWaitForMultipleObjects, 8) {
 
 KERNEL_EXPORT(145, KeSetEvent, 3) { return uint32_t(SetEvent(*FromPointer(a[0]))); }
 
-bool IsFileHandle(uint32_t h);  // files.cpp
-
 KERNEL_EXPORT(246, ObReferenceObjectByHandle, 3) {
     uint32_t h = a[0];
     ObjectRef o = h == 0xFFFFFFFE ? CurrentRef() : FromHandle(h);
@@ -707,13 +686,6 @@ KERNEL_EXPORT(246, ObReferenceObjectByHandle, 3) {
     if (!o->guest) {
         uint32_t body = mem::AllocSystem(32);
         Bind(o, body);
-        // a file object: XAPI reads its DeviceObject (+8), whose first byte holds flags and +0x1C the FATX
-        // cluster size, so it gets one; file objects are never looked up by pointer, so the stamp may go
-        if (IsFileHandle(h)) {
-            uint32_t device = mem::AllocSystem(0x40);
-            W32(device + 0x1C, 0x4000);
-            W32(body + 8, device);
-        }
     }
     W32(a[2], o->guest);
     return kSuccess;

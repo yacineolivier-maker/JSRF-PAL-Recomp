@@ -10,7 +10,7 @@ This port was created using the [Xbox XBE Recomp](https://github.com/TGP482/Xbox
 ## Installation
 
 - Put your game files in the `assets` folder. This can be an ISO, or the extracted data files.
-- Run `Game.exe`.
+- Run `Game.exe`. The first start compiles the game's code for your PC, this only happens once.
 - Recomp settings can be adjusted in `settings.toml` beside the exe.
 
 ## Features

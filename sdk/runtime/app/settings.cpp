@@ -55,7 +55,7 @@ void Load() {
         if (mode == kModes[i]) s.display_mode = DisplayMode(i);
     s.width = t["width"].value_or(s.width);
     s.height = t["height"].value_or(s.height);
-    // 200 at most: 4 times the output's pixels (the crash over 150 was the descriptor ring wrapping within a frame)
+    // 200 at most: 4 times the output's pixels
     s.render_percent = std::clamp<uint32_t>(t["render_percent"].value_or(s.render_percent), 25, 200);
     s.fps_cap = t["fps_cap"].value_or(s.fps_cap);
     s.vsync = t["vsync"].value_or(s.vsync);

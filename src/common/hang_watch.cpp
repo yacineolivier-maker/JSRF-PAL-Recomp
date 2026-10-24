@@ -43,15 +43,6 @@ void StartHangWatch() {
             }
         }).detach();
     }
-    // XBE_RECORD_AT=<s>x<n> : les n images présentées à partir de s, dans <XBE_CAPTURE_DIR>\suite
-    if (const char* r = std::getenv("XBE_RECORD_AT")) {
-        int s = std::atoi(r), n = 60;
-        if (const char* x = std::strchr(r, 'x')) n = std::atoi(x + 1);
-        std::thread([s, n] {
-            std::this_thread::sleep_for(std::chrono::seconds(s));
-            gpu::g_record = n;
-        }).detach();
-    }
     // XBE_MEMDUMP_AT=<s>[,<s>...] : l'image du jeu (0x10000 à 0x900000) écrite dans memdump_<s>.bin à côté de l'exe
     if (const char* m = std::getenv("XBE_MEMDUMP_AT")) {
         std::vector<int> at;

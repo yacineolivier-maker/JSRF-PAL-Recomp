@@ -23,8 +23,6 @@ static std::recursive_mutex g_lock;
 uint8_t* Base() { return g_base; }
 
 // physical memory shows at 0x80000000 and again at 0xF0000000 (write combined view)
-static uint32_t g_image_lo = 0, g_image_hi = 0;  // the image, by its virtual = physical addresses
-
 static bool InPhysical(uint32_t va) {
     return (va >= kContiguousBase && va < kContiguousBase + kPhysicalSize) ||
            (va >= kWriteCombineBase && va < kWriteCombineBase + kPhysicalSize);
@@ -238,11 +236,6 @@ void ReserveImage(uint32_t base, uint32_t size) {
     uint32_t b = base & ~0xFFFFu;
     uint32_t e = (base + size + 0xFFFF) & ~0xFFFFu;
     g_user.Remove(b, e - b);
-    // physical addresses in the image's range mean the image (VirtualFromPhysical): contiguous memory stays out of it
-    g_image_lo = b;
-    g_image_hi = e;
-    uint32_t from = b > kKernelDataSize ? b : kKernelDataSize;
-    if (e > from) g_contig.Remove(kContiguousBase + from, e - from);
     Reservation r{e - b, 4, std::vector<uint8_t>((e - b) / kPage, 1)};  // 4 is PAGE_READWRITE
     g_reserved[b] = std::move(r);
     Commit(b, e - b);
@@ -357,11 +350,6 @@ uint32_t AllocContiguous(uint32_t size, uint32_t lowest, uint32_t highest, uint3
     uint32_t hi = highest >= kPhysicalSize - 1 ? kContiguousBase + kPhysicalSize - 1 : kContiguousBase | highest;
     // highest fit first: low memory stays free for requests limited to it (D3D report pages, first 16 MB)
     uint32_t a = g_contig.Alloc(size, align, lo, hi, true);
-    if (!a && hi < kContiguousBase + kPhysicalSize - 1) {
-        // the image holds the low physical memory a title may ask for: there is no bus limit to keep here
-        LOG_FIRST(4, "memory: contiguous allocation of %X bytes below %X placed higher", size, highest);
-        a = g_contig.Alloc(size, align, lo, kContiguousBase + kPhysicalSize - 1, true);
-    }
     if (!a) {
         LOGE("memory: contiguous allocation of %X bytes failed (%X..%X align %X), %llu KB in use", size, lowest, highest, align,
              (unsigned long long)(g_contig.Used() >> 10));
@@ -431,9 +419,6 @@ uint32_t PhysicalFromVirtual(uint32_t va) {
 }
 
 uint32_t VirtualFromPhysical(uint32_t pa) {
-    // the image's own pages: PhysicalFromVirtual gives a title its virtual address as their physical one (a static
-    // buffer handed to the GPU, as Conker's push buffer fixups are), so they come back to the image
-    if (pa >= g_image_lo && pa < g_image_hi) return pa;
     if (pa < kPhysicalSize) return kContiguousBase | pa;
     return pa;
 }

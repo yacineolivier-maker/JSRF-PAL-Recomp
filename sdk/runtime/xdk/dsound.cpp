@@ -15,44 +15,6 @@
 #include "xdk/dsp_image.h"
 #include "xdk/layout.h"
 
-// configs written before the SDK knew the name
-#ifndef SYM_IDirectSoundBuffer_GetVoiceProperties
-#define SYM_IDirectSoundBuffer_GetVoiceProperties FFFFFD17
-#define HAS_IDirectSoundBuffer_GetVoiceProperties 0
-#endif
-#ifndef SYM_IDirectSoundStream_GetVoiceProperties
-#define SYM_IDirectSoundStream_GetVoiceProperties FFFFFD18
-#define HAS_IDirectSoundStream_GetVoiceProperties 0
-#endif
-#ifndef SYM_IDirectSound_CreateSoundStream
-#define SYM_IDirectSound_CreateSoundStream FFFFFD10
-#define HAS_IDirectSound_CreateSoundStream 0
-#endif
-#ifndef SYM_IDirectSoundBuffer_SetPitch
-#define SYM_IDirectSoundBuffer_SetPitch FFFFFD11
-#define HAS_IDirectSoundBuffer_SetPitch 0
-#endif
-#ifndef SYM_IDirectSoundStream_SetPitch
-#define SYM_IDirectSoundStream_SetPitch FFFFFD12
-#define HAS_IDirectSoundStream_SetPitch 0
-#endif
-#ifndef SYM_IDirectSoundBuffer_SetLFO
-#define SYM_IDirectSoundBuffer_SetLFO FFFFFD13
-#define HAS_IDirectSoundBuffer_SetLFO 0
-#endif
-#ifndef SYM_IDirectSoundBuffer_SetEG
-#define SYM_IDirectSoundBuffer_SetEG FFFFFD14
-#define HAS_IDirectSoundBuffer_SetEG 0
-#endif
-#ifndef SYM_IDirectSoundStream_SetOutputBuffer
-#define SYM_IDirectSoundStream_SetOutputBuffer FFFFFD16
-#define HAS_IDirectSoundStream_SetOutputBuffer 0
-#endif
-#ifndef SYM_IDirectSoundStream_SetLFO
-#define SYM_IDirectSoundStream_SetLFO FFFFFD15
-#define HAS_IDirectSoundStream_SetLFO 0
-#endif
-
 using namespace kernel;
 
 namespace kernel {
@@ -119,6 +81,10 @@ X86Func* Find(uint32_t guest);
 #define SYM_IDirectSoundBuffer_Pause FFFFFF0D
 #define HAS_IDirectSoundBuffer_Pause 0
 #endif
+#ifndef SYM_IDirectSoundBuffer_SetEG
+#define SYM_IDirectSoundBuffer_SetEG FFFFFF0E
+#define HAS_IDirectSoundBuffer_SetEG 0
+#endif
 
 namespace {
 
@@ -173,12 +139,6 @@ struct Voice {
     bool playing = false, looping = false, paused = false;
     bool sync = false;  // held until IDirectSound_SynchPlayback
     bool active = false, ending = false;  // stream: took a packet since it went quiet, quiet again once they run out
-    // stream: IDirectSoundStream_FlushEx with DSSTREAMFLUSHEX_ASYNC, done once its release (if asked) has played;
-    // until then it plays on, fading out, and the packets it takes go with the flush
-    bool flush_pending = false;
-    int64_t release_at = 0, release_ms = 0;  // when the flush was asked, how long it lasts
-    bool released = false;  // flushed so: stopped, packets it takes come back flushed with the next mix, unplayed
-    uint32_t eg_release_ms = 0;  // the amplitude envelope's release (IDirectSoundStream_SetEG)
     double pos = 0;  // frames
     uint32_t freq = 0;
     // stream
@@ -600,20 +560,10 @@ std::optional<Cursor> BufferFrame(Voice& v) {
     return at;
 }
 
-int64_t NowMs() {
-    using namespace std::chrono;
-    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
-}
-
 // adds the voice to the bins, frames of kBins interleaved, its levels ramped across the block
 void MixVoice(Voice& v, float* bins, uint32_t frames) {
     Place at = Locate(v);
     Gains target = Levels(v, at);
-    if (v.flush_pending && v.release_ms > 0) {  // the release of an enveloped flush, a linear fade
-        float left = std::clamp(1.0f - float(NowMs() - v.release_at) / float(v.release_ms), 0.0f, 1.0f);
-        for (auto& row : target.bin)
-            for (float& g : row) g *= left;
-    }
     float itd = Itd(at.azimuth);
     if (!v.has_gain) {
         v.gain = target;
@@ -662,20 +612,7 @@ void Render(float* out, uint32_t frames) {
     bins.assign(size_t(frames) * kBins, 0.0f);
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     for (auto& [obj, v] : g_voices) {
-        if (v.released && !v.packets.empty()) {
-            for (auto& pk : v.packets) Complete(v, pk, kFlushed);
-            v.packets.clear();
-        }
-        if (v.flush_pending && NowMs() - v.release_at >= v.release_ms) {
-            // its packets come back flushed through DirectSoundDoWork, as the console's do once the flush is done
-            v.flush_pending = false;
-            v.released = true;
-            for (auto& pk : v.packets) Complete(v, pk, kFlushed);
-            v.packets.clear();
-            v.pos = 0;
-            Deactivate(v);
-        }
-        if (v.paused || v.sync || v.released || (!v.stream && !v.playing)) continue;
+        if (v.paused || v.sync || (!v.stream && !v.playing)) continue;
         MixVoice(v, bins.data(), frames);
     }
     if (dsp::Loaded()) dsp::Run(bins.data(), frames);
@@ -684,6 +621,11 @@ void Render(float* out, uint32_t frames) {
         out[i * 2] = std::clamp(b[kFrontLeft] + kFold * (b[kCentre] + b[kBackLeft]), -1.0f, 1.0f);
         out[i * 2 + 1] = std::clamp(b[kFrontRight] + kFold * (b[kCentre] + b[kBackRight]), -1.0f, 1.0f);
     }
+}
+
+int64_t NowMs() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
 void Run(X86Context& ctx, const std::vector<Done>& done) {
@@ -864,6 +806,9 @@ HLE_STDCALL(IDirectSound_GetCaps, 2) {
 #ifdef HAS_IDirectSoundBuffer_AddRef
 HLE_STDCALL(IDirectSoundBuffer_AddRef, 1) { return 1; }
 #endif
+#ifdef HAS_IDirectSoundBuffer_SetLFO
+HLE_STDCALL(IDirectSoundBuffer_SetLFO, 2) { return 0; }
+#endif
 #ifdef HAS_IDirectSoundBuffer_SetConeAngles
 HLE_STDCALL(IDirectSoundBuffer_SetConeAngles, 4) { return 0; }
 #endif
@@ -1037,23 +982,9 @@ HLE_STDCALL(IDirectSound_GetOutputLevels, 3) {
 HLE_STDCALL(DirectSoundCreateBuffer, 2) { return NewBuffer(a[0], a[1]); }
 HLE_STDCALL(IDirectSound_CreateSoundBuffer, 4) { return NewBuffer(a[1], a[2]); }
 
-// XBE_DSOUND_TRACE : each buffer and stream call but the frequent ones (status, position, packets) logged
-static void TraceCall(const char* kind, const char* name, const Args& a, int n, uint32_t ret) {
-    static const bool on = std::getenv("XBE_DSOUND_TRACE") != nullptr;
-    // 2: the packets as well, 3: every call
-    static const int level = on ? std::atoi(std::getenv("XBE_DSOUND_TRACE")) : 0;
-    if (!on || (level < 3 && (!std::strcmp(name, "GetStatus") || !std::strcmp(name, "GetCurrentPosition"))) ||
-        (level < 2 && !std::strcmp(name, "Process")))
-        return;
-    char args[96] = "";
-    for (int i = 1, at = 0; i < n && i < 7; i++) at += std::snprintf(args + at, sizeof(args) - at, " %08X", a[i]);
-    LOGI("dsound: %s %08X %s%s (from %08X)", kind, a[0], name, args, ret);
-}
-
 #define BUFFER(name, nargs)                                 \
     static uint32_t buf_##name(Voice& v, const Args& a);    \
     HLE_STDCALL(IDirectSoundBuffer_##name, nargs) {         \
-        TraceCall("buffer", #name, a, nargs, R32(ctx.esp));            \
         std::lock_guard<std::recursive_mutex> lock(g_lock); \
         Voice* v = Find(a[0]);                              \
         return v ? buf_##name(*v, a) : 0x80004005u;         \
@@ -1210,10 +1141,12 @@ BUFFER(SetFormat, 2) {
 
 // streams, the object carries the XDK's own vtable
 
-// a stream from its description, written to out; DirectSoundCreateStream and IDirectSound_CreateSoundStream
-static uint32_t NewStream(uint32_t desc, uint32_t out) {
+HLE_STDCALL(DirectSoundCreateStream, 2) {
+    XDK_REQUIRE("dsound", XDK_KEY(CDirectSoundStream_Vtable), XDK_KEY(CDirectSoundStream_Vtable2),
+                XDK_DATA(DSound_StreamVtable), XDK_DATA(DSound_StreamVtable2));
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     Start();
+    uint32_t desc = a[0];
     uint32_t obj = mem::AllocSystem(0x80);
     std::memset(HostPtr(obj), 0, 0x80);
     W32(obj + XDK_CDirectSoundStream_Vtable, kStreamVtable);
@@ -1229,85 +1162,13 @@ static uint32_t NewStream(uint32_t desc, uint32_t out) {
     SetBins(v, R32(desc + 20));
     v.is3d = flags & 0x10;  // DSBCAPS_CTRL3D
     v.headroom = DefaultHeadroom(flags);
-    W32(out, obj);
-    if (std::getenv("XBE_DSOUND_TRACE"))
-        LOGI("dsound: stream %08X created, %u packets, callback %08X context %08X", obj, v.max_packets, v.callback, v.context);
+    W32(a[1], obj);
     return 0;
 }
-
-HLE_STDCALL(DirectSoundCreateStream, 2) {
-    XDK_REQUIRE("dsound", XDK_KEY(CDirectSoundStream_Vtable), XDK_KEY(CDirectSoundStream_Vtable2),
-                XDK_DATA(DSound_StreamVtable), XDK_DATA(DSound_StreamVtable2));
-    return NewStream(a[0], a[1]);
-}
-// (this, description, stream out, outer unknown)
-HLE_STDCALL(IDirectSound_CreateSoundStream, 4) {
-    XDK_REQUIRE("dsound", XDK_KEY(CDirectSoundStream_Vtable), XDK_KEY(CDirectSoundStream_Vtable2),
-                XDK_DATA(DSound_StreamVtable), XDK_DATA(DSound_StreamVtable2));
-    return NewStream(a[1], a[2]);
-}
-
-// pitch: octaves in 1/4096, relative to 48 kHz
-static uint32_t PitchToFrequency(int32_t pitch) { return uint32_t(48000.0 * std::exp2(double(pitch) / 4096.0) + 0.5); }
-// an IDirectSoundStream wrapper's pointer: the stream, or its interface 0x1C into it as the library lays it out
-static Voice* FindStream(uint32_t p) {
-    Voice* v = Find(p);
-    return v ? v : p ? Find(p - 0x1C) : nullptr;
-}
-// the library's own versions write voice registers a host voice does not have
-HLE_STDCALL(IDirectSoundBuffer_SetPitch, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    if (Voice* v = Find(a[0])) v->freq = PitchToFrequency(int32_t(a[1]));
-    return 0;
-}
-HLE_STDCALL(IDirectSoundStream_SetPitch, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    if (Voice* v = FindStream(a[0])) v->freq = PitchToFrequency(int32_t(a[1]));
-    return 0;
-}
-// GetVoiceProperties(this, DSVOICEPROPS): mix bin count, eight (bin, volume) pairs, pitch, two I3DL2 volumes
-static void VoiceProperties(const Voice& v, uint32_t out) {
-    std::memset(HostPtr(out), 0, 4 + 8 * 8 + 12);
-    uint32_t n = std::min<uint32_t>(v.nbins, 8);
-    W32(out, n);
-    for (uint32_t i = 0; i < n; i++) {
-        W32(out + 4 + i * 8, v.bin[i]);
-        W32(out + 8 + i * 8, uint32_t(v.bin_mb[v.bin[i] & 31]));
-    }
-    uint32_t f = v.freq ? v.freq : v.rate;
-    W32(out + 4 + 64, uint32_t(int32_t(std::lround(std::log2(double(f ? f : 48000) / 48000.0) * 4096.0))));
-}
-HLE_STDCALL(IDirectSoundBuffer_GetVoiceProperties, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    Voice* v = Find(a[0]);
-    if (!v) v = a[0] ? Find(a[0] - 0x1C) : nullptr;
-    if (!v) {
-        std::memset(HostPtr(a[1]), 0, 4);
-        return 0x80004005u;
-    }
-    VoiceProperties(*v, a[1]);
-    return 0;
-}
-HLE_STDCALL(IDirectSoundStream_GetVoiceProperties, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    Voice* v = FindStream(a[0]);
-    if (!v) {
-        std::memset(HostPtr(a[1]), 0, 4);
-        return 0x80004005u;
-    }
-    VoiceProperties(*v, a[1]);
-    return 0;
-}
-// low frequency oscillators and envelopes are not played
-HLE_STDCALL(IDirectSoundBuffer_SetLFO, 2) { return 0; }
-HLE_STDCALL(IDirectSoundStream_SetLFO, 2) { return 0; }
-// a stream sent into another buffer (a submix) plays to the mix bins it has instead
-HLE_STDCALL(IDirectSoundStream_SetOutputBuffer, 2) { return 0; }
 
 #define STREAM(name, nargs)                                     \
     static uint32_t str_##name(Voice& v, const Args& a);        \
     HLE_STDCALL(CDirectSoundStream_##name, nargs) {             \
-        TraceCall("stream", #name, a, nargs, R32(ctx.esp));                \
         uint32_t r;                                             \
         std::vector<Done> flushed;                              \
         {                                                       \
@@ -1323,7 +1184,6 @@ HLE_STDCALL(IDirectSoundStream_SetOutputBuffer, 2) { return 0; }
 
 // the stream's callbacks still queued and those of its flushed packets, in order, go to the calling thread
 static void FlushStream(Voice& v) {
-    v.flush_pending = v.released = false;
     for (auto& pk : v.packets) Complete(v, pk, kFlushed);
     v.packets.clear();
     v.pos = 0;
@@ -1362,26 +1222,14 @@ STREAM(GetInfo, 2) {
     W32(info + 12, 0);
     return 0;
 }
-// DSSTREAMSTATUS_READY (takes a packet), _PLAYING from the first packet until flushed or played out, _PAUSED.
-// XACT reads _PLAYING to know a stopping cue's stream is done.
 STREAM(GetStatus, 2) {
-    uint32_t st = v.packets.size() < v.max_packets ? 0x1u : 0u;
-    if (v.active) st |= 0x10000u;
-    if (v.paused) st |= 0x20000u;
-    W32(a[1], st);
+    W32(a[1], v.packets.size() < v.max_packets ? 1u : 0u);  // XMEDIASTATUS_ACCEPT_INPUT
     return 0;
 }
 STREAM(Process, 3) {
     uint32_t in = a[1];
     if (!in) return 0;
     Packet pk{R32(in), R32(in + 4), R32(in + 8), R32(in + 12), R32(in + 16)};
-    if (v.released) {
-        // XACT feeds a stopping cue's stream until it reads it stopped: played they would make it play on,
-        // returned during the call they would be fed again at once, forever
-        if (pk.status_ptr) W32(pk.status_ptr, kPacketPending);
-        v.packets.push_back(pk);
-        return 0;
-    }
     if (pk.completed_ptr) W32(pk.completed_ptr, 0);
     if (pk.status_ptr) W32(pk.status_ptr, kPacketPending);
     v.packets.push_back(pk);
@@ -1399,18 +1247,8 @@ STREAM(Flush, 1) {
     FlushStream(v);
     return 0;
 }
-// (this, time stamp low, high, flags): DSSTREAMFLUSHEX_ASYNC (1) returns at once and the packets come back later.
-// XACT stops a cue so and only then marks it stopping: packets returned during the call read as played ones, and
-// it fed the stream again (the menu music played to its end, 30 s, before the next level could load).
-// The release envelopes (2, 4) are not played.
 STREAM(FlushEx, 4) {
     if (a[3] && !v.active) return 0;
-    if (a[3] & 1) {
-        if (!v.flush_pending) v.release_at = NowMs();
-        v.release_ms = a[3] & 6 ? v.eg_release_ms : 0;  // DSSTREAMFLUSHEX_ENVELOPE, _ENVELOPE2
-        v.flush_pending = true;
-        return 0;
-    }
     FlushStream(v);
     return 0;
 }
@@ -1428,14 +1266,8 @@ STREAM(SetFrequency, 2) {
     return 0;
 }
 STREAM(SetFilter, 2) { return 0; }
-// the library's own writes voice registers a host stream does not have; envelopes are not played, but the
-// amplitude envelope's release (DSENVELOPEDESC dwRelease, in 512 sample steps) times an enveloped flush
-HLE_STDCALL(IDirectSoundStream_SetEG, 2) {
-    std::lock_guard<std::recursive_mutex> lock(g_lock);
-    Voice* v = FindStream(a[0]);
-    if (v && a[1] && R32(a[1]) == 0) v->eg_release_ms = uint32_t(uint64_t(R32(a[1] + 24)) * 512 * 1000 / 48000);
-    return 0;
-}
+// the library's own writes voice registers a host stream does not have; envelopes are not played
+HLE_STDCALL(IDirectSoundStream_SetEG, 2) { return 0; }
 STREAM(SetHeadroom, 2) {
     v.headroom = Db(-int32_t(a[1]));
     return 0;

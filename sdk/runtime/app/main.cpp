@@ -42,39 +42,12 @@ LONG WINAPI WriteCrashDump(EXCEPTION_POINTERS* e) {
     if (kernel::Thread* t = kernel::Current(); e && t && t->ctx) {
         auto* r = e->ExceptionRecord;
         LOGE("exception %08lX at %p on guest thread %X", r->ExceptionCode, r->ExceptionAddress, t->id);
-        // image-relative, for llvm-symbolizer --obj=<exe>.exe 0x140000000+rva
-        LOGE("  host rva %llX, last indirect call %08X",
-             (unsigned long long)(reinterpret_cast<uintptr_t>(r->ExceptionAddress) -
-                                  reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))),
-             t->ctx->last_icall);
         if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
             uint64_t va = r->ExceptionInformation[1], g = uint64_t(reinterpret_cast<uintptr_t>(kernel::g_base));
             LOGE("  %s %llX, guest %08llX", r->ExceptionInformation[0] ? "write" : "read", (unsigned long long)va,
                  (unsigned long long)(va - g));
         }
         kernel::LogGuestStack(*t->ctx, 256);
-    }
-    if (e && !(kernel::Current() && kernel::Current()->ctx)) {
-        // a host thread (render, audio, window): where it was, image-relative, and the frames on its stack
-        auto* r = e->ExceptionRecord;
-        uintptr_t mod = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-        LOGE("exception %08lX on a host thread at rva %llX", r->ExceptionCode,
-             (unsigned long long)(reinterpret_cast<uintptr_t>(r->ExceptionAddress) - mod));
-        if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2)
-            LOGE("  %s %llX", r->ExceptionInformation[0] ? "write" : "read", (unsigned long long)r->ExceptionInformation[1]);
-        CONTEXT c = *e->ContextRecord;
-        char line[512] = {}, *q = line;
-        for (int i = 0; i < 24 && c.Rip; i++) {
-            q += std::snprintf(q, 16, " %llX", (unsigned long long)(c.Rip - mod));
-            DWORD64 image = 0;
-            PRUNTIME_FUNCTION f = RtlLookupFunctionEntry(c.Rip, &image, nullptr);
-            if (!f) break;
-            void* handler = nullptr;
-            DWORD64 frame = 0;
-            RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, c.Rip, f, &c, &handler, &frame, nullptr);
-        }
-        LOGE("  host stack rva%s", line);
-        logx::Flush();
     }
     auto dir = ExeDir() / "CrashDumps";
     CreateDirectoryW(dir.c_str(), nullptr);
@@ -286,6 +259,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int) {
 
     app::GameFiles game;
     if (!app::FindGame(game)) return 1;
+    if (!app::PrepareGameCode(game)) return 1;
 
     bool splash = app::OpenSplash(), handover = app::StartHandover();
 

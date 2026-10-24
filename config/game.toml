@@ -6,6 +6,7 @@ title = 0x49470018
 entry = 0x148AD8
 xdk = 4134
 out = "generated/game"
+library = "JSRF.dll"
 partitions = 32
 code_sections = [".text", "D3D", "DSOUND", "MMATRIX", "XGRPH", "XPP"]
 

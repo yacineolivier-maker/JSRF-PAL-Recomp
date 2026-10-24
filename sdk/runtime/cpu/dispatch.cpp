@@ -1,7 +1,18 @@
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -12,15 +23,28 @@
 
 #ifdef _WIN32
 #include <intrin.h>
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
 #else
 #include <x86intrin.h>
+#endif
+
+#ifdef _WIN32
+// the C runtime functions the game code DLL calls, passed on to the DLLs that have them
+#pragma comment(linker, "/EXPORT:memcpy=vcruntime140.memcpy")
+#pragma comment(linker, "/EXPORT:memmove=vcruntime140.memmove")
+#pragma comment(linker, "/EXPORT:memset=vcruntime140.memset")
+#pragma comment(linker, "/EXPORT:__CxxFrameHandler3=vcruntime140.__CxxFrameHandler3")
+#pragma comment(linker, "/EXPORT:_CxxThrowException=vcruntime140._CxxThrowException")
+#pragma comment(linker, "/EXPORT:sin=ucrtbase.sin")
+#pragma comment(linker, "/EXPORT:cos=ucrtbase.cos")
+#pragma comment(linker, "/EXPORT:tan=ucrtbase.tan")
+#pragma comment(linker, "/EXPORT:atan2=ucrtbase.atan2")
+#pragma comment(linker, "/EXPORT:fmod=ucrtbase.fmod")
+#pragma comment(linker, "/EXPORT:sqrt=ucrtbase.sqrt")
+#pragma comment(linker, "/EXPORT:sqrtf=ucrtbase.sqrtf")
+#pragma comment(linker, "/EXPORT:log2=ucrtbase.log2")
+#pragma comment(linker, "/EXPORT:exp2=ucrtbase.exp2")
+#pragma comment(linker, "/EXPORT:ldexp=ucrtbase.ldexp")
+#pragma comment(linker, "/EXPORT:frexp=ucrtbase.frexp")
 #endif
 
 namespace {
@@ -28,6 +52,17 @@ namespace {
 std::vector<X86Func*> g_table;  // one slot per code byte
 std::vector<bool> g_continuation;
 uint32_t g_lo = 0, g_hi = 0;
+#ifdef _WIN32
+// the recompiled code's tables, exported by the game code DLL
+const X86FuncMapping* g_mappings = nullptr;
+const uint32_t* g_continuations = nullptr;
+uint32_t g_entry = 0;
+#else
+// the headless harness links them in
+const X86FuncMapping* g_mappings = X86FuncMappings;
+const uint32_t* g_continuations = X86Continuations;
+uint32_t g_entry = X86EntryPoint;
+#endif
 
 struct Export {
     const char* name = nullptr;
@@ -43,15 +78,38 @@ constexpr uint32_t kKernelThunkBase = 0xFE000000;
 
 namespace dispatch {
 
+#ifdef _WIN32
+// the game code DLL and its tables; data comes by name, as the delay loaded imports carry only functions
+bool Load(const std::filesystem::path& dll) {
+    HMODULE m = LoadLibraryW(dll.c_str());
+    if (!m) return false;
+    g_mappings = reinterpret_cast<const X86FuncMapping*>(GetProcAddress(m, "X86FuncMappings"));
+    g_continuations = reinterpret_cast<const uint32_t*>(GetProcAddress(m, "X86Continuations"));
+    auto* lo = reinterpret_cast<const uint32_t*>(GetProcAddress(m, "X86CodeBase"));
+    auto* hi = reinterpret_cast<const uint32_t*>(GetProcAddress(m, "X86CodeEnd"));
+    auto* entry = reinterpret_cast<const uint32_t*>(GetProcAddress(m, "X86EntryPoint"));
+    if (!g_mappings || !g_continuations || !lo || !hi || !entry) return false;
+    g_lo = *lo;
+    g_hi = *hi;
+    g_entry = *entry;
+    return true;
+}
+#endif
+
+uint32_t EntryPoint() { return g_entry; }
+bool InCode(uint32_t va) { return va >= g_lo && va < g_hi; }
+
 void Init() {
+#ifndef _WIN32
     g_lo = X86CodeBase;
     g_hi = X86CodeEnd;
+#endif
     g_table.assign(g_hi - g_lo, nullptr);
     size_t n = 0;
-    for (const X86FuncMapping* m = X86FuncMappings; m->host; m++, n++)
+    for (const X86FuncMapping* m = g_mappings; m->host; m++, n++)
         if (m->guest >= g_lo && m->guest < g_hi) g_table[m->guest - g_lo] = m->host;
     g_continuation.assign(g_hi - g_lo, false);
-    for (const uint32_t* c = X86Continuations; *c; c++)
+    for (const uint32_t* c = g_continuations; *c; c++)
         if (*c >= g_lo && *c < g_hi) g_continuation[*c - g_lo] = true;
     LOGI("dispatch: %zu functions over %08X..%08X", n, g_lo, g_hi);
 }
@@ -182,26 +240,13 @@ void LogGuestStack(X86Context& ctx, int words) {
         uint32_t a = ctx.esp + uint32_t(i) * 4;
         if (!mem::IsCommitted(a)) break;
         uint32_t v = R32(a);
-        if (v >= X86CodeBase && v < X86CodeEnd) LOGE("  [esp+%03X] %08X", i * 4, v);
+        if (dispatch::InCode(v)) LOGE("  [esp+%03X] %08X", i * 4, v);
     }
 }
 }  // namespace kernel
 
-// host frames as image-relative addresses, for llvm-symbolizer: the recompiled functions on the way here
-static void LogHostStack() {
-#ifdef _WIN32
-    void* frames[32];
-    USHORT n = RtlCaptureStackBackTrace(1, 32, frames, nullptr);
-    uintptr_t mod = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-    char line[32 * 12 + 16] = {}, *p = line;
-    for (USHORT i = 0; i < n; i++) p += std::snprintf(p, 12, " %llX", (unsigned long long)(reinterpret_cast<uintptr_t>(frames[i]) - mod));
-    LOGE("  host stack rva%s", line);
-#endif
-}
-
 void x86_trap(X86Context& ctx, uint32_t va, const char* what) {
     LOGE("guest trap at %08X: %s", va, what);
-    LogHostStack();
     kernel::LogGuestStack(ctx, 64);
     logx::Flush();
 #ifdef _WIN32

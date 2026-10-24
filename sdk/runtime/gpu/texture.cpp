@@ -280,11 +280,7 @@ bool Describe(uint32_t header, TextureDesc& d) {
     d.cube = fmt & 4;
     uint32_t dims = (fmt >> 4) & 0xF;
     d.levels = std::max<uint32_t>((fmt >> 16) & 0xF, 1);
-    // the GPU reads Size only for the linear formats: a swizzled or compressed texture with its log2 sizes set takes
-    // them, whatever a title left in Size (read as linear, its coordinates would be taken as texels)
-    const FormatInfo& fi = Format(d.format);
-    bool sized_by_format = type == 0x40000 && (fi.swizzled || fi.compressed) && ((fmt >> 20) & 0xFF);
-    if (size && !sized_by_format) {
+    if (size) {
         d.width = (size & 0xFFF) + 1;
         d.height = ((size >> 12) & 0xFFF) + 1;
         d.pitch = ((size >> 24) + 1) * 64;
@@ -334,20 +330,7 @@ void DecodeLevel(const TextureDesc& d, uint32_t level, uint32_t face, const uint
     if (f.compressed) {
         uint32_t bw = std::max(1u, (w + 3) / 4), bh = std::max(1u, (h + 3) / 4);
         row_pitch = bw * f.bits;
-        if (z <= 1) {
-            out.assign(src, src + size_t(row_pitch) * bh * z);
-            return;
-        }
-        // a compressed volume keeps its slices by fours: for each 4x4 block of a group of four slices, the block of
-        // each slice in turn (read as whole slices, the detail volumes of the floors came out as a speckled noise)
-        out.resize(size_t(row_pitch) * bh * z);
-        uint32_t bs = f.bits, group = std::min(z, 4u);
-        size_t off = 0;
-        for (uint32_t g = 0; g < z; g += 4)
-            for (uint32_t by = 0; by < bh; by++)
-                for (uint32_t bx = 0; bx < bw; bx++)
-                    for (uint32_t s = 0; s < group && g + s < z; s++, off += bs)
-                        std::memcpy(&out[((size_t(g + s) * bh + by) * bw + bx) * bs], src + off, bs);
+        out.assign(src, src + size_t(row_pitch) * bh * z);
         return;
     }
     if (f.host == Host::R32F) {

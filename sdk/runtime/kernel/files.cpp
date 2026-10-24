@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <thread>
 
 #include "kernel/disc.h"
 #include "kernel/kernel.h"
@@ -172,9 +171,6 @@ void Complete(uint32_t event, uint32_t apc, uint32_t apc_ctx, uint32_t iosb) {
 
 }  // namespace
 
-// for the object manager, which gives file objects a device object
-bool IsFileHandle(uint32_t h) { return FileFromHandle(h) != nullptr; }
-
 std::string ReadAnsiString(uint32_t str) {
     if (!str) return {};
     uint16_t len = R16(str);
@@ -243,26 +239,6 @@ Target Resolve(const std::string& xbox_path, uint32_t root_handle) {
     if (root_handle) {
         if (auto f = FileFromHandle(root_handle)) p = Normalize(f->xbox + "\\" + p);
     }
-    // XBE_SUBST=from=to[;from=to...]: a part of the path read as another (tests: one level's data in another's place)
-    static const std::vector<std::pair<std::string, std::string>> subst = [] {
-        std::vector<std::pair<std::string, std::string>> v;
-        if (const char* e = std::getenv("XBE_SUBST")) {
-            std::string s = e;
-            for (size_t a = 0; a < s.size();) {
-                size_t b = s.find(';', a);
-                if (b == std::string::npos) b = s.size();
-                std::string item = s.substr(a, b - a);
-                if (size_t eq = item.find('='); eq != std::string::npos) v.push_back({Upper(item.substr(0, eq)), item.substr(eq + 1)});
-                a = b + 1;
-            }
-        }
-        return v;
-    }();
-    for (const auto& [from, to] : subst)
-        if (size_t at = Upper(p).find(from); at != std::string::npos) {
-            LOG_FIRST(40, "files: %s read as %s", p.c_str(), to.c_str());
-            p = p.substr(0, at) + to + p.substr(at + from.size());
-        }
     if (p.size() >= 2 && p[1] == ':') p = "\\??\\" + p;
     std::lock_guard<std::mutex> lock(g_links_lock);
     for (int depth = 0; depth < 8; depth++) {
@@ -525,13 +501,6 @@ KERNEL_EXPORT(237, NtWriteFileGather, 8) { return Transfer(a, true, a[5]); }
 
 KERNEL_EXPORT(211, NtQueryInformationFile, 5) {
     uint32_t h = a[0], iosb = a[1], out = a[2], len = a[3], cls = a[4];
-    // a title polling its files in a tight loop (the level load after New Game, until the menu music ends) starved
-    // the audio threads it waits for: on the console they run at a higher priority. Queries closer than a millisecond
-    // give the others 200 us (from the disc image, cheaper to query, the load never ended)
-    thread_local auto last = std::chrono::steady_clock::time_point{};
-    auto now = std::chrono::steady_clock::now();
-    if (now - last < std::chrono::milliseconds(1)) std::this_thread::sleep_for(std::chrono::microseconds(200));
-    last = std::chrono::steady_clock::now();
     auto f = FileFromHandle(h);
     if (!f) return kInvalidHandle;
     std::error_code ec;
@@ -618,8 +587,8 @@ KERNEL_EXPORT(226, NtSetInformationFile, 5) {
     return kSuccess;
 }
 
-// the volume information both queries answer: bytes written to out, or 0 for a class the host has none of
-static uint32_t VolumeInformation(uint32_t out, uint32_t len, uint32_t cls) {
+KERNEL_EXPORT(218, NtQueryVolumeInformationFile, 5) {
+    uint32_t iosb = a[1], out = a[2], len = a[3], cls = a[4];
     std::memset(HostPtr(out), 0, len);
     switch (cls) {
         case 3:  // FileFsSizeInformation: 16 GiB total, 8 GiB free in 16 KiB units
@@ -627,49 +596,31 @@ static uint32_t VolumeInformation(uint32_t out, uint32_t len, uint32_t cls) {
             W64(out + 8, 0x80000);
             W32(out + 0x10, 32);
             W32(out + 0x14, 512);
-            return 0x18;
+            IoStatus(iosb, kSuccess, 0x18);
+            return kSuccess;
         case 7:  // FileFsFullSizeInformation
             W64(out, 0x100000);
             W64(out + 8, 0x80000);
             W64(out + 0x10, 0x80000);
             W32(out + 0x18, 32);
             W32(out + 0x1C, 512);
-            return 0x20;
+            IoStatus(iosb, kSuccess, 0x20);
+            return kSuccess;
         case 1:  // FileFsVolumeInformation
             W32(out + 8, 0x12345678);  // VolumeSerialNumber
-            return 0x18;
+            IoStatus(iosb, kSuccess, 0x18);
+            return kSuccess;
         case 5:  // FileFsAttributeInformation: attributes, max name, name length, "FATX"
             W32(out, 0);
             W32(out + 4, 42);
             W32(out + 8, 4);
             std::memcpy(HostPtr(out + 12), "FATX", 4);
-            return 16;
+            IoStatus(iosb, kSuccess, 16);
+            return kSuccess;
         default:
-            return 0;
+            LOG_FIRST(8, "NtQueryVolumeInformationFile: class %u", cls);
+            return kInvalidParameter;
     }
-}
-
-KERNEL_EXPORT(218, NtQueryVolumeInformationFile, 5) {
-    uint32_t iosb = a[1], out = a[2], len = a[3], cls = a[4];
-    uint32_t n = VolumeInformation(out, len, cls);
-    if (!n) {
-        LOG_FIRST(8, "NtQueryVolumeInformationFile: class %u", cls);
-        return kInvalidParameter;
-    }
-    IoStatus(iosb, kSuccess, n);
-    return kSuccess;
-}
-
-// IoQueryVolumeInformation(file object, class, length, buffer, returned length): the same for a referenced object
-KERNEL_EXPORT(76, IoQueryVolumeInformation, 5) {
-    uint32_t len = a[2], out = a[3], ret = a[4], cls = a[1];
-    uint32_t n = VolumeInformation(out, len, cls);
-    if (!n) {
-        LOG_FIRST(8, "IoQueryVolumeInformation: class %u", cls);
-        return kInvalidParameter;
-    }
-    if (ret) W32(ret, n);
-    return kSuccess;
 }
 
 KERNEL_EXPORT(207, NtQueryDirectoryFile, 10) {

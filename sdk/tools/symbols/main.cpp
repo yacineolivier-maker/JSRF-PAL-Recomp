@@ -1353,7 +1353,8 @@ std::string AbiTable(const std::map<std::string, std::string>& abi) {
     return s;
 }
 
-int Scan(const fs::path& xbe_path, const fs::path& xdk, const fs::path& out, const std::string& name) {
+int Scan(const fs::path& xbe_path, const fs::path& xdk, const fs::path& out, const std::string& name,
+         const std::string& library) {
     Image img;
     if (!img.Load(xbe_path)) return 1;
     auto& x = img.x;
@@ -1386,6 +1387,7 @@ int Scan(const fs::path& xbe_path, const fs::path& xdk, const fs::path& out, con
     PrintScan(x, symbols, data, report);
 
     std::string s = XbeTable(xbe_path, x, build, name, Partitions(img), sections);
+    s += "library = \"" + library + "\"  # <exe>.dll, which the executable delay loads\n";
     s += "\n# extra entry points\n[functions]\n";
     s += "\n# functions the host replaces or calls by name, 0 where the image has none\n[symbols]\n" + Table(symbols);
     s += "\n[data]\n" + Table(data);
@@ -1410,6 +1412,7 @@ int main(int argc, char** argv) {
     };
     std::string out = opt("--out");
     std::string name = opt("--name");
+    std::string library = opt("--library");
     std::string skip = opt("--skip");
     if (!a.empty() && a[0] == "--sign" && a.size() >= 2 && !out.empty()) {
         std::set<std::string> sk;
@@ -1420,11 +1423,11 @@ int main(int argc, char** argv) {
         }
         return Sign(out, std::vector<fs::path>(a.begin() + 1, a.end()), sk);
     }
-    if (a.size() != 2) {
+    if (a.size() != 2 || library.empty()) {
         std::fprintf(stderr,
-                     "usage: xbe_symbols <game.xbe> <sdk>/xdk [--out config/game.toml] [--name game]\n"
+                     "usage: xbe_symbols <game.xbe> <sdk>/xdk --library <exe>.dll [--out config/game.toml] [--name game]\n"
                      "       xbe_symbols --sign <config.toml>... --out signatures.toml [--skip name,...]\n");
         return 1;
     }
-    return Scan(a[0], a[1], out, name.empty() ? "game" : name);
+    return Scan(a[0], a[1], out, name.empty() ? "game" : name, library);
 }

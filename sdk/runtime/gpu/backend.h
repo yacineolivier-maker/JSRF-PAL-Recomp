@@ -67,7 +67,5 @@ inline std::atomic<bool> g_capture{false};
 // a game's wide screen: pretransformed draws on the main target that do not span its width have their screen x
 // pulled toward its centre by this factor (4:3 HUD on a wider frame); 1 leaves them
 inline std::atomic<float> g_hud_x_scale{1.0f};
-// that many presented frames saved one after the other under diag::CaptureDir (what flickers)
-inline std::atomic<int> g_record{0};
 
 }  // namespace gpu

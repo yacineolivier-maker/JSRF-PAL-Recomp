@@ -37,10 +37,7 @@ constexpr uint32_t kBatchCommands = 64;
 
 // resource headers the render thread reads: common, data, lock, format, size
 constexpr uint32_t kHeaderBytes = 20, kHeaderSlot = 32;
-// guest memory for header copies; a copy is renewed after half a ring. A frame of the beach (13000 draws, each with
-// new vertex buffer headers) takes over 1 MB: the title waits rather than overwrite copies the render thread has yet
-// to read (Scratch), surfaces otherwise read a vertex buffer's header, came out 640x480 and were made again each frame
-constexpr uint32_t kHeaderRing = 8u << 20;
+constexpr uint32_t kHeaderRing = 1u << 20;  // guest memory for header copies; a copy is renewed after half a ring
 
 enum class WaitFor : uint8_t { ReadBack, Resource, Fence, Flush, Copy, Frame, Count };
 
@@ -72,9 +69,9 @@ size_t At(const State& s, const void* p) { return size_t(static_cast<const uint8
 std::vector<Range> StateRanges() {
     static const State s;
     return {
-        {At(s, &s.rs), At(s, &s.textures) - At(s, &s.rs)},  // of simple only the methods drawing reads (SendState)
+        {At(s, &s.simple), At(s, &s.textures) - At(s, &s.simple)},
         {At(s, &s.index_buffer), At(s, &s.vs) - At(s, &s.index_buffer)},
-        {At(s, &s.psc), At(s, &s.rt) - At(s, &s.psc)},  // the vertex constants apart (SendState)
+        {At(s, &s.vsc), At(s, &s.rt) - At(s, &s.vsc)},
         {At(s, &s.scissor_count), At(s, &s.transforms) - At(s, &s.scissor_count)},
         {At(s, &s.transforms[2]), 2 * sizeof(s.transforms[0])},
         {At(s, &s.transforms[16]), 4 * sizeof(s.transforms[0])},
@@ -82,8 +79,6 @@ std::vector<Range> StateRanges() {
         {At(s, &s.material), sizeof(State) - At(s, &s.material)},
     };
 }
-
-constexpr size_t kStateBlock = 1024;  // bytes of State compared at once before its 64 byte pieces
 
 // equal bytes, 16 at a time: most of the state is compared on every draw
 bool Same(const uint8_t* a, const uint8_t* b, size_t n) {
@@ -229,11 +224,7 @@ public:
     void WaitFence(uint32_t fence) override { Wait(fence, WaitFor::Fence, "fence"); }
     bool Busy(uint32_t resource) override {
         auto it = last_use_.find(resource);
-        if (it == last_use_.end()) return false;
-        // used by the batch still being recorded: send it, as the console's IsBusy kicks the push buffer off, or a
-        // title polling a resource between frames (a loading screen) waits for a batch nothing else will send
-        if (it->second >= cur_->id) Submit();
-        return it->second > done_.load();
+        return it != last_use_.end() && it->second > done_.load();
     }
     void WaitResource(uint32_t resource) override {
         auto it = last_use_.find(resource);
@@ -279,18 +270,6 @@ private:
     uint32_t Scratch(const void* p, uint32_t n) {
         uint32_t size = (n + kHeaderSlot - 1) & ~(kHeaderSlot - 1);
         if (ring_pos_ % kHeaderRing + size > kHeaderRing) ring_pos_ += kHeaderRing - ring_pos_ % kHeaderRing;
-        // a batch submitted at ring position m reads copies made from m - kHeaderRing / 2 on (a batch spans far less
-        // than a quarter ring): writing up to e overwrites e - kHeaderRing, so batches up to e - kHeaderRing / 4 are done
-        uint64_t end = ring_pos_ + size;
-        while (!ring_marks_.empty()) {
-            auto [id, mark] = ring_marks_.front();
-            if (done_.load() >= id) {
-                ring_marks_.pop_front();
-                continue;
-            }
-            if (mark + kHeaderRing / 4 > end) break;
-            Wait(id, WaitFor::Resource, "header ring");
-        }
         uint32_t at = ring_ + uint32_t(ring_pos_ % kHeaderRing);
         ring_pos_ += size;
         std::memcpy(kernel::HostPtr(at), p, n);
@@ -332,30 +311,9 @@ private:
         const uint8_t* now = reinterpret_cast<const uint8_t*>(&s);
         Cmd c{Op::State};
         size_t first = cur_->bytes.size();
-        // 1 KB blocks compared in one pass first: a draw changes a few pieces of the 12 KB (13000 draws a frame on
-        // the beach, each piece compared alone cost a third of the title's thread)
-        const uint8_t* was = reinterpret_cast<const uint8_t*>(&sent_);
         for (const Range& r : ranges_)
-            for (size_t block = r.off, end = r.off + r.len; block < end; block += kStateBlock) {
-                size_t block_end = std::min(block + kStateBlock, end);
-                if (Same(was + block, now + block, block_end - block)) continue;
-                for (size_t off = block; off < block_end; off += 64)
-                    Delta(was + off, now + off, std::min<size_t>(64, block_end - off));
-            }
-        // the vertex constants (3 KB) only after a write, in 1 KB blocks as well
-        if (vsc_writes_ != g_vsc_writes) {
-            vsc_writes_ = g_vsc_writes;
-            const size_t vsc = At(s, &s.vsc), vsc_end = vsc + sizeof(s.vsc);
-            for (size_t block = vsc; block < vsc_end; block += kStateBlock) {
-                size_t block_end = std::min(block + kStateBlock, vsc_end);
-                if (Same(was + block, now + block, block_end - block)) continue;
-                for (size_t off = block; off < block_end; off += 64)
-                    Delta(was + off, now + off, std::min<size_t>(64, block_end - off));
-            }
-        }
-        for (uint32_t m : kDrawMethods) Delta(&sent_.simple[m >> 2], &s.simple[m >> 2], 4);
-        for (uint32_t base : {kMPsConstant0 >> 2, kMPsConstant1 >> 2})
-            Delta(&sent_.simple[base], &s.simple[base], kDrawConstantMethods * 4);
+            for (size_t off = r.off, end = r.off + r.len; off < end; off += 64)
+                Delta(reinterpret_cast<const uint8_t*>(&sent_) + off, now + off, std::min<size_t>(64, end - off));
         std::array<uint32_t, 4> textures;
         for (size_t i = 0; i < 4; i++) textures[i] = Header(s.textures[i]);
         Delta(&sent_.textures, &textures, sizeof(textures));
@@ -399,7 +357,6 @@ private:
 
     uint64_t Submit() {
         uint64_t id = cur_->id;
-        ring_marks_.push_back({id, ring_pos_});
         {
             std::lock_guard lock(m_);
             queue_.push_back(cur_);
@@ -506,10 +463,8 @@ private:
     std::array<Recent<uint64_t>, 64> recent_uses_{};
     uint32_t ring_ = 0;
     uint64_t ring_pos_ = 0;
-    std::deque<std::pair<uint64_t, uint64_t>> ring_marks_;  // submitted batch, ring position then
     Batch* cur_ = nullptr;
     State sent_;  // the state as the render thread will have it
-    uint64_t vsc_writes_ = ~0ull;  // g_vsc_writes when the vertex constants were last compared
     std::unordered_map<uint32_t, uint64_t> last_use_;
     std::unordered_set<uint32_t> written_;  // surfaces drawn since their last read-back, by data address
     std::unordered_set<uint64_t> logged_;   // perf diagnostic: read-backs named once, by address and kind

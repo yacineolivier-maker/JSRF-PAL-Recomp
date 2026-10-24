@@ -52,10 +52,7 @@ void Init(const std::string& dir, const std::string& prefix, bool append) {
 const std::string& Path() { return g_path; }
 
 void Write(Level lv, const char* fmt, ...) {
-    // XBE_VERBOSE set: a release build logs its information lines too
-    static const bool verbose = kVerbose || std::getenv("XBE_VERBOSE") != nullptr;
-    if (!verbose && lv < Level::Info) return;
-    if (!verbose && lv < Level::Error) return;
+    if (!kVerbose && lv < Level::Error) return;
     char msg[4096];
     va_list ap;
     va_start(ap, fmt);

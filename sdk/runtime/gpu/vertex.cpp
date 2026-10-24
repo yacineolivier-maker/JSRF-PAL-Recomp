@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <unordered_set>
 
 #include <dxgiformat.h>
 
@@ -270,53 +269,46 @@ uint32_t StrideOf(const State& s, const VertexShader& layout, const VertexShader
 constexpr uint32_t kStrideAlign = 4;            // the input assembler reads strides in dwords
 constexpr uint32_t kElementOffsetEnd = 0x10000;  // the element offset is stored as uint16_t
 
-// the input assembler reads strides in dwords: a stream with another stride is copied out with each vertex padded
-uint32_t HostStride(uint32_t stride) { return (stride + kStrideAlign - 1) & ~(kStrideAlign - 1); }
-
 bool RawReadable(const State& s, const Inputs& inputs) {
     for (int k = 0; k < inputs.nregs; k++) {
         const auto& in = inputs.layout.inputs[size_t(inputs.regs[k])];
         HostElement he = HostFormat(in.type);
         uint32_t stride = StrideOf(s, inputs.layout, in);
-        // padded, the element must not read into the padding past the vertex unless the format's extra component is
-        // replaced by the decode (SHORT3 and the 3 component bytes read as 4)
-        bool padded = stride % kStrideAlign != 0;
-        bool fits = !padded || (in.offset + he.bytes <= HostStride(stride) &&
-                                (in.offset + he.bytes <= stride || he.decode == kDecodeW1 || he.decode == kDecodeIntW1));
-        bool readable = he.format && stride && fits && in.offset < kElementOffsetEnd &&
+        bool readable = he.format && stride && stride % kStrideAlign == 0 && in.offset < kElementOffsetEnd &&
                         in.offset % std::min<uint32_t>(he.bytes, 4) == 0;
         if (!readable) {
-            static std::unordered_set<uint32_t> told;
-            if (told.size() < 64 && told.insert(in.type << 16 | (stride & 0xFFFF)).second)
-                LOG_FIRST(64, "vertex: converted on the CPU: v%d type %02X offset %u stride %u", inputs.regs[k], in.type,
-                          in.offset, stride);
+            LOG_FIRST(32, "vertex: converted on the CPU: v%d type %02X offset %u stride %u", inputs.regs[k], in.type,
+                      in.offset, stride);
             return false;
         }
     }
     return true;
 }
 
-// returns the buffer slot the stream got: read in place when dense with a dword stride, else its vertices copied
-// (in draw order when the indices are sparse), each padded to a dword stride
+// sparse indices: the vertices they read, copied in draw order
+void GatherVertices(const State& s, const DrawRange& d, const uint8_t* data, uint32_t stride,
+                    std::vector<uint8_t>& g) {
+    g.resize(size_t(d.count) * stride);
+    for (uint32_t i = 0; i < d.count; i++) {
+        std::memcpy(&g[size_t(i) * stride], data + size_t(DrawVertex(s, d, i)) * stride, stride);
+    }
+}
+
+// returns the buffer slot the stream got
 int AddRawBuffer(const State& s, const VertexShader& layout, const VertexShader::Input& in, const DrawRange& d,
                  bool dense, Assembled& out) {
     using namespace kernel;
     const auto& st = s.streams[size_t(in.stream)];
-    uint32_t stride = StrideOf(s, layout, in), host = HostStride(stride);
+    uint32_t stride = StrideOf(s, layout, in);
     const uint8_t* data = static_cast<const uint8_t*>(HostPtr(mem::VirtualFromPhysical(R32(st.vb + kResData))));
     int slot = int(out.buffer_count);
-    if (dense && host == stride) {
+    if (dense) {
         out.buffers[out.buffer_count++] = {data + size_t(d.first_vertex) * stride, d.span * stride, stride};
-        return slot;
+    } else {
+        auto& g = out.gathered[out.buffer_count];
+        GatherVertices(s, d, data, stride, g);
+        out.buffers[out.buffer_count++] = {g.data(), d.count * stride, stride};
     }
-    auto& g = out.gathered[out.buffer_count];
-    uint32_t n = dense ? d.span : d.count;
-    g.assign(size_t(n) * host, 0);
-    for (uint32_t i = 0; i < n; i++) {
-        uint32_t id = dense ? d.first_vertex + i : DrawVertex(s, d, i);
-        std::memcpy(&g[size_t(i) * host], data + size_t(id) * stride, stride);
-    }
-    out.buffers[out.buffer_count++] = {g.data(), n * host, host};
     return slot;
 }
 
@@ -449,8 +441,6 @@ void FvfInputs(uint32_t fvf, VertexShader& vs) {
     vs.stream_stride[0] = off;
 }
 
-uint32_t ElementBytes(uint32_t type) { return TypeBytes(type); }
-
 bool Assemble(const State& s, uint32_t prim, uint32_t start, uint32_t count, const uint8_t* ip, Assembled& out) {
     ResetAssembled(out);
     if (!count || prim < 1 || prim > 10) return false;
@@ -476,31 +466,6 @@ bool Assemble(const State& s, uint32_t prim, uint32_t start, uint32_t count, con
     int nregs = CollectRegs(s, *layout, regs, out);
     if (!nregs) return false;
     Inputs inputs = {*layout, regs, nregs};
-
-    // an element past its stream's stride reads the next vertex: worth knowing which shader asks for it
-    for (int k = 0; k < nregs; k++) {
-        const auto& in = layout->inputs[size_t(regs[k])];
-        uint32_t stride = StrideOf(s, *layout, in);
-        if (stride && in.offset + TypeBytes(in.type) > stride)
-            LOG_FIRST(20, "vertex: element v%d (type %X offset %u) past stride %u, vs %08X, stream %d", regs[k], in.type, in.offset,
-                      stride, s.vs_handle, in.stream);
-    }
-    // every vertex the draw reads lies in memory the title has: a stream or index gone wrong draws nothing
-    for (int k = 0; k < nregs; k++) {
-        const auto& in = layout->inputs[size_t(regs[k])];
-        const auto& st = s.streams[size_t(in.stream)];
-        if (!st.vb) continue;
-        uint64_t data = mem::VirtualFromPhysical(kernel::R32(st.vb + kResData)), stride = StrideOf(s, *layout, in);
-        uint64_t first = data + in.offset + uint64_t(d.first_vertex) * stride;
-        uint64_t last = first + uint64_t(d.span - 1) * stride + 15;
-        if (last >= (1ull << 32) || !mem::IsCommitted(uint32_t(first)) || !mem::IsCommitted(uint32_t(last))) {
-            LOG_FIRST(8, "vertex: draw reading past the title's memory skipped (%08llX..%08llX): vs %08X stream %d header %08X "
-                         "common %08X data %08X stride %u first vertex %u span %u", (unsigned long long)first, (unsigned long long)last,
-                      s.vs_handle, in.stream, st.vb, kernel::R32(st.vb), kernel::R32(st.vb + kResData), uint32_t(stride),
-                      d.first_vertex, d.span);
-            return false;
-        }
-    }
 
     // a pretransformed draw's screen x span (a float position in v0): HUD pieces told from full screen passes
     if (out.pretransformed) {
