@@ -156,7 +156,7 @@ bool Analysis::SledTable(uint32_t jmp_va, const uint32_t* ring, int nring, JumpT
     uint32_t imm[3] = {};
     int k = 0;
     for (int back = 2; back <= std::min(nring, 8) && k < 3; back++) {
-        if (!Decode(ring[(nring - back) & 7], in, ops)) return false;
+        if (!Decode(ring[(nring - back) & 15], in, ops)) return false;
         bool writes_r = ops[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
                         ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LEGACY_32, ops[0].reg.value) == r;
         if (in.mnemonic == want[k] && writes_r && (k == 1 || ops[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE)) {
@@ -199,7 +199,7 @@ bool Analysis::Walk(uint32_t entry, bool trusted, std::vector<uint32_t>* calls) 
     while (!work.empty()) {
         uint32_t va = work.back();
         work.pop_back();
-        uint32_t ring[8] = {};
+        uint32_t ring[16] = {};
         int nring = 0;
         for (;;) {
             if (insns_.count(va) || seen.count(va)) break;
@@ -233,7 +233,7 @@ bool Analysis::Walk(uint32_t entry, bool trusted, std::vector<uint32_t>* calls) 
             }
             local.push_back({va, insn});
             seen[va] = 1;
-            ring[nring++ & 7] = va;
+            ring[nring++ & 15] = va;
             if (insn.flow == Flow::Call) {
                 if (insn.target == va + insn.len) {
                     // call $+5 pushes eip only
@@ -258,7 +258,8 @@ bool Analysis::Walk(uint32_t entry, bool trusted, std::vector<uint32_t>* calls) 
                     for (uint32_t t : jt.targets) work.push_back(t);
                     tables.push_back(jt);
                 } else if (!jt.targets.empty()) {
-                    // bound the table from a preceding "cmp idx, n"
+                    // bound the table from a preceding "cmp idx, n", or "mov r, n ... cmp idx, r", looking back past
+                    // instructions that leave the index alone (MSVC schedules stores and pushes in between)
                     ZydisDecodedInstruction ji;
                     ZydisDecodedOperand jo[ZYDIS_MAX_OPERAND_COUNT];
                     Decode(va, ji, jo);
@@ -266,44 +267,89 @@ bool Analysis::Walk(uint32_t entry, bool trusted, std::vector<uint32_t>* calls) 
                     uint32_t bound = 0;
                     uint32_t byte_table = 0;
                     ZydisRegister byte_idx = ZYDIS_REGISTER_NONE;
-                    for (int k = 1; k < 4 && k < nring; k++) {
-                        uint32_t pa = ring[(nring - 1 - k) & 7];
+                    ZydisRegister bound_reg = ZYDIS_REGISTER_NONE;
+                    int far = 0;
+                    auto big = [](ZydisRegister r) {
+                        return ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LEGACY_32, r);
+                    };
+                    auto writes = [&](const ZydisDecodedInstruction& pi, const ZydisDecodedOperand* po, ZydisRegister r) {
+                        for (int o = 0; o < pi.operand_count; o++)
+                            if (po[o].type == ZYDIS_OPERAND_TYPE_REGISTER && (po[o].actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) &&
+                                big(po[o].reg.value) == r)
+                                return true;
+                        return false;
+                    };
+                    for (int k = 1; k < 16 && k < nring; k++) {
+                        uint32_t pa = ring[(nring - 1 - k) & 15];
                         ZydisDecodedInstruction pi;
                         ZydisDecodedOperand po[ZYDIS_MAX_OPERAND_COUNT];
-                        if (!Decode(pa, pi, po)) break;
-                        if (pi.mnemonic == ZYDIS_MNEMONIC_MOVZX && po[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
-                            ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LEGACY_32, po[0].reg.value) == idx &&
-                            po[1].type == ZYDIS_OPERAND_TYPE_MEMORY && po[1].size == 8 &&
+                        if (!Decode(pa, pi, po) || pi.mnemonic == ZYDIS_MNEMONIC_CALL) break;
+                        if (bound_reg != ZYDIS_REGISTER_NONE) {
+                            if (pi.mnemonic == ZYDIS_MNEMONIC_MOV && po[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+                                big(po[0].reg.value) == bound_reg && po[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+                                bound = uint32_t(po[1].imm.value.u) + 1;
+                                far = k;
+                                break;
+                            }
+                            if (writes(pi, po, bound_reg)) break;
+                            continue;
+                        }
+                        if (!byte_table && pi.mnemonic == ZYDIS_MNEMONIC_MOVZX && po[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+                            big(po[0].reg.value) == idx && po[1].type == ZYDIS_OPERAND_TYPE_MEMORY && po[1].size == 8 &&
                             po[1].mem.base != ZYDIS_REGISTER_NONE && po[1].mem.disp.has_displacement) {
                             byte_table = uint32_t(po[1].mem.disp.value);
-                            byte_idx = po[1].mem.base;
+                            byte_idx = big(po[1].mem.base);
+                            continue;
                         }
-                        if (pi.mnemonic == ZYDIS_MNEMONIC_CMP && po[0].type == ZYDIS_OPERAND_TYPE_REGISTER &&
-                            po[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
-                            ZydisRegister r = ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LEGACY_32, po[0].reg.value);
-                            if (r == idx || r == byte_idx) bound = uint32_t(po[1].imm.value.u) + 1;
+                        if (pi.mnemonic == ZYDIS_MNEMONIC_CMP && po[0].type == ZYDIS_OPERAND_TYPE_REGISTER) {
+                            ZydisRegister r = big(po[0].reg.value);
+                            if (r == idx || r == byte_idx) {
+                                if (po[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+                                    bound = uint32_t(po[1].imm.value.u) + 1;
+                                    far = k;
+                                } else if (po[1].type == ZYDIS_OPERAND_TYPE_REGISTER) {
+                                    bound_reg = big(po[1].reg.value);
+                                    continue;
+                                }
+                            }
                             break;
                         }
+                        // the index changes between the cmp and the jmp: the cmp does not bound it
+                        if (writes(pi, po, byte_table ? byte_idx : idx)) break;
                     }
                     if (bound && bound < 4096) {
+                        uint32_t base = uint32_t(ji.operand_count ? jo[0].mem.disp.value : jt.table);
                         uint32_t n = bound;
                         if (byte_table) {
                             uint32_t mx = 0;
                             for (uint32_t i = 0; i < bound; i++) {
                                 int64_t o = img.Offset(byte_table + i);
                                 if (o >= 0) mx = std::max<uint32_t>(mx, img.file[size_t(o)]);
-                                if (byte_table + i >= lo_ && byte_table + i < hi_) cover_[byte_table + i - lo_] = 3;
                             }
                             n = mx + 1;
                         }
-                        jt.targets.clear();
-                        jt.slots.clear();
-                        uint32_t base = uint32_t(ji.operand_count ? jo[0].mem.disp.value : jt.table);
+                        std::vector<uint32_t> targets, slots;
                         for (uint32_t i = 0; i < n; i++) {
                             uint32_t t;
                             if (!img.Read32(base + i * 4, t)) break;
-                            jt.targets.push_back(t);
-                            jt.slots.push_back(base + i * 4);
+                            targets.push_back(t);
+                            slots.push_back(base + i * 4);
+                        }
+                        // a bound found beyond the three instructions before the jmp, or through a register, is
+                        // trusted only when the whole table is code near the jmp and the index bytes stop short of it
+                        bool ok = far < 4 && bound_reg == ZYDIS_REGISTER_NONE;
+                        if (!ok) {
+                            ok = targets.size() == n && !(byte_table && byte_table < base && byte_table + bound > base);
+                            for (uint32_t t : targets) ok &= IsCode(t) && (t > va ? t - va : va - t) < 0x10000;
+                        }
+                        if (ok) {
+                            if (byte_table)
+                                for (uint32_t i = 0; i < bound; i++)
+                                    if (byte_table + i >= lo_ && byte_table + i < hi_) cover_[byte_table + i - lo_] = 3;
+                            jt.targets = targets;
+                            jt.slots = slots;
+                        } else {
+                            bound = 0;
                         }
                     }
                     if (!bound && byte_table) {
