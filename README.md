@@ -21,8 +21,18 @@ Early work in progress:
 
 - Boots through the logos, the PAL graffiti warning, the title screen and the attract demo, then starts a new game:
   story scenes and dialogue text work, at 60 fps in 1080p.
-- Xbox / XInput controllers through SDL3.
-- Not yet checked: audio by ear, saves, every stage. Expect bugs.
+- Xbox / XInput controllers through SDL3; keyboard and mouse as a fallback (keys rebindable in `settings.toml`).
+- Music, sound effects and voices.
+- Not yet checked: saves, every stage. Expect bugs.
+
+## Features
+
+- **Hor+ widescreen**: the game's 4:3 projection, focal length and frustum are widened to the output's aspect
+  (16:9, 21:9…), while the 2D interface keeps its 4:3 proportions. Option `ecran_large`.
+- Any resolution, internal resolution up to 200 % (supersampling), SMAA, adaptive sharpening, anisotropic filtering.
+- 60 fps, vsync, frame cap; English, French, German, Spanish or Italian text and voices from the PAL disc
+  (`langue` in `settings.toml`).
+- In-game options panel on **F1**, saved to `settings.toml`.
 
 ## Supported version
 
@@ -75,5 +85,7 @@ recompilation statique du `default.xbe` avec Xbox XBE Recomp. Aucune donnée du 
 propre copie. Seule la version **PAL** est prise en charge (les autres portages communautaires demandent le disque
 américain) ; ses cinq langues sont disponibles.
 
-État : démarrage, logos, avertissement, écran titre, démo, nouvelle partie, scènes et dialogues à 60 fps en 1080p.
+État : démarrage, logos, avertissement, écran titre, démo, nouvelle partie, scènes, dialogues et premiers pas en jeu
+à 60 fps en 1080p, musique et voix. Écran large Hor+ (interface gardée en 4:3), SMAA, netteté, panneau d'options F1,
+choix de la langue du disque PAL, clavier-souris en secours.
 Compilation : Visual Studio avec Clang et CMake, jeu extrait dans `assets`, puis `build.bat`.
