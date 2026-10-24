@@ -769,6 +769,8 @@ std::string FixedVertexHlsl(uint16_t regs, bool pretransformed, uint64_t decode,
     if (pretransformed) {
         s += "    float4 rhw = " + v(0, "float4(0,0,0,1)") + ";\n";
         s += "    float w = rhw.w == 0 ? 1 : 1 / rhw.w;\n";
+        // a HUD piece on a wider frame (gpu::g_hud_x_scale): x pulled toward the centre, negative surf.w
+        s += "    if (surf.w < 0) rhw.x = surf.x * 0.5 + (rhw.x - surf.x * 0.5) * -surf.w;\n";
         s += "    oPos = float4(rhw.xy, rhw.z / surf.z, w);\n";
     } else {
         s += "    float4 ip = float4(" + v(0, "float4(0,0,0,1)") + ".xyz, 1);\n";

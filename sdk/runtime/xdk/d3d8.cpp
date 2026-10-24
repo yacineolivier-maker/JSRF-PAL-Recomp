@@ -887,6 +887,13 @@ HLE_STDCALL(D3DDevice_SetTransform, 2) {
     uint32_t t = a[0];
     if (t >= 10) return 0;
     std::memcpy(HostPtr(kDevice + kDevTransforms + t * 64), HostPtr(a[1]), 64);
+    static const bool trace_proj = std::getenv("XBE_TRACE_PROJ") != nullptr;
+    if (trace_proj && t == 1) {
+        float m[16];
+        std::memcpy(m, HostPtr(a[1]), 64);
+        LOG_FIRST(40, "d3d: projection %.4f %.4f %.4f %.4f / %.4f %.4f / %.4f %.4f %.4f %.4f from %08X", m[0], m[1], m[2], m[3], m[5], m[6],
+                  m[8], m[9], m[10], m[11], R32(ctx.esp));
+    }
     uint32_t pc = t < 2 ? t + 2 : t < 6 ? t + 14 : t + 250;
     std::memcpy(g_state.transforms[pc].data(), HostPtr(a[1]), 64);
     return 0;

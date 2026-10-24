@@ -2405,6 +2405,16 @@ void D3D12Backend::UploadConstants(const State& s, const DrawShaders& sh, const 
     FillSurfaceConstants(s, size, sh.prog, c);
     // points: host pixels per console pixel, also keeps them off the far edge pull out of screen passes
     if (k.topo == uint32_t(Topology::Points)) c.surf[3] = TargetScale();
+    else {
+        // a HUD piece (see g_hud_x_scale): negative, the shader's pretransformed path scales x about the centre
+        c.surf[3] = 0;
+        float hud = g_hud_x_scale.load(std::memory_order_relaxed);
+        uint32_t gw = 0, gh = 0;
+        GuestSize(gw, gh);
+        if (hud != 1.0f && asm_.pretransformed && size.w == gw && size.h == gh &&
+            !(asm_.min_x <= 1.0f && asm_.max_x >= float(size.w) - 1.0f))
+            c.surf[3] = -hud;
+    }
     FillFogConstants(s, sh.prog, c);
     FillCombinerConstants(s, c);
     if (ext_) ext_->Constants(reinterpret_cast<float(*)[4]>(vsc.data()), c.ext, bound_rt_, k.blend ? k.src : 1);

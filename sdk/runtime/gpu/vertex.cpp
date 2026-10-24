@@ -187,6 +187,7 @@ void ResetAssembled(Assembled& out) {
     out.index16 = false;
     out.draw_count = 0;
     out.index_count = 0;
+    out.min_x = out.max_x = 0;
     out.base_vertex = 0;
 }
 
@@ -501,6 +502,22 @@ bool Assemble(const State& s, uint32_t prim, uint32_t start, uint32_t count, con
         }
     }
 
+    // a pretransformed draw's screen x span (a float position in v0): HUD pieces told from full screen passes
+    if (out.pretransformed) {
+        const auto& in = layout->inputs[0];
+        const auto& st = s.streams[size_t(in.stream)];
+        if (st.vb && (in.type == 0x42 || in.type == 0x32 || in.type == 0x22)) {
+            uint32_t data = mem::VirtualFromPhysical(kernel::R32(st.vb + kResData)), stride = StrideOf(s, *layout, in);
+            float lo = 1e30f, hi = -1e30f;
+            for (uint32_t v = 0; v < d.span && v < 4096; v++) {
+                float x;
+                std::memcpy(&x, kernel::HostPtr(data + in.offset + (d.first_vertex + v) * stride), 4);
+                lo = std::min(lo, x);
+                hi = std::max(hi, x);
+            }
+            if (lo <= hi) out.min_x = lo, out.max_x = hi;
+        }
+    }
     // the guest's own vertices when the input assembler can read every element of them
     bool raw = kRawVertices && RawReadable(s, inputs);
     if (raw) return AssembleRaw(s, inputs, d, out);
