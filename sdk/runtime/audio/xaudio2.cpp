@@ -8,6 +8,8 @@
 #include <windows.h>
 #include <xaudio2.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -58,6 +60,21 @@ void StartOutput(std::function<void(float*, uint32_t)> render) {
             }
             float* b = &bufs[(n % kSlots) * kFrames * 2];
             render(b, kFrames);
+            // XBE_AUDIO_DUMP=<file.wav>: the mixed output written as 32-bit float stereo, for checks without listening
+            static FILE* dump = [] {
+                const char* d = std::getenv("XBE_AUDIO_DUMP");
+                FILE* f = d ? std::fopen(d, "wb") : nullptr;
+                if (f) {
+                    uint32_t hdr[11] = {0x46464952, 0x7FFFFFFF, 0x45564157, 0x20746D66, 16, 0x00020003, kRate, kRate * 8, 0x00200008,
+                                        0x61746164, 0x7FFFFFDB};
+                    std::fwrite(hdr, 4, 11, f);
+                }
+                return f;
+            }();
+            if (dump) {
+                std::fwrite(b, 8, kFrames, dump);
+                std::fflush(dump);
+            }
             XAUDIO2_BUFFER xb{};
             xb.AudioBytes = kFrames * 8;
             xb.pAudioData = reinterpret_cast<const BYTE*>(b);
