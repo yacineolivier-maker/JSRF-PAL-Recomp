@@ -239,3 +239,60 @@ inline constexpr char kSmaaWeightsVs[] = "SmaaWeightV vs(uint id : SV_VertexID) 
 inline constexpr char kSmaaBlendVs[] = "SmaaBlendV vs(uint id : SV_VertexID) { return vs_blend(id); }\n";
 
 }  // namespace game
+
+// Lumière et couleurs (idées du portage Wind Waker) : bloom sur la luminance (le ciel et les couleurs saturées ne
+// brillent pas), flou au quart de la résolution, ajouté en lumière linéaire ; puis vibrance et courbe en S. Le noir et
+// le blanc restent en place : le dessin cel-shadé garde ses aplats.
+inline constexpr char kGlowHlsl[] = R"(
+cbuffer C : register(b1) { float4 k0; float4 k1; };
+Texture2D img : register(t0);
+Texture2D glow : register(t1);
+SamplerState LinearSampler : register(s0);
+float4 vs(uint id : SV_VertexID) : SV_Position {
+    float2 t = float2((id << 1) & 2, id & 2);
+    return float4(t * float2(2, -2) + float2(-1, 1), 0, 1);
+}
+float3 Lin(float3 c) { return pow(saturate(c), 2.2); }
+float Luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
+// k0 : taille de sortie, seuil, genou ; 4 lectures bilinéaires couvrent les 4x4 pixels de l'image
+float4 glow_bright(float4 pos : SV_Position) : SV_Target {
+    float2 uv = pos.xy / k0.xy, d = 0.25 / k0.xy;
+    float3 s = 0;
+    s += Lin(img.SampleLevel(LinearSampler, uv + float2(-d.x, -d.y), 0).rgb);
+    s += Lin(img.SampleLevel(LinearSampler, uv + float2(d.x, -d.y), 0).rgb);
+    s += Lin(img.SampleLevel(LinearSampler, uv + float2(-d.x, d.y), 0).rgb);
+    s += Lin(img.SampleLevel(LinearSampler, uv + float2(d.x, d.y), 0).rgb);
+    s *= 0.25;
+    float l = Luma(pow(s, 1 / 2.2));  // le seuil se règle sur l'image vue
+    float knee = max(k0.w, 1e-4);
+    float soft = clamp(l - k0.z + knee, 0, 2 * knee);
+    soft = soft * soft / (4 * knee);
+    float w = max(soft, l - k0.z) / max(l, 1e-4);
+    return float4(s * w, 1);
+}
+// k0 : taille, k1.xy : pas en uv (un axe)
+float4 glow_blur(float4 pos : SV_Position) : SV_Target {
+    float2 uv = pos.xy / k0.xy;
+    static const float wt[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+    float3 s = img.SampleLevel(LinearSampler, uv, 0).rgb * wt[0];
+    [unroll] for (int i = 1; i < 5; i++) {
+        float2 o = k1.xy * (i * 1.5);
+        s += img.SampleLevel(LinearSampler, uv + o, 0).rgb * wt[i];
+        s += img.SampleLevel(LinearSampler, uv - o, 0).rgb * wt[i];
+    }
+    return float4(s, 1);
+}
+// k0 : taille, force du bloom, vibrance ; k1.x : contraste
+float4 glow_mix(float4 pos : SV_Position) : SV_Target {
+    float2 uv = pos.xy / k0.xy;
+    float4 c4 = img.Load(int3(pos.xy, 0));
+    float3 c = c4.rgb;
+    if (k0.z > 0) c = pow(saturate(Lin(c) + glow.SampleLevel(LinearSampler, uv, 0).rgb * k0.z), 1 / 2.2);
+    float y = Luma(c);
+    float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+    c = lerp(float3(y, y, y), c, 1 + k0.w * (1 - sat));
+    c = saturate(c);
+    c = lerp(c, c * c * (3 - 2 * c), k1.x);
+    return float4(c, c4.a);
+}
+)";

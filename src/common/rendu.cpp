@@ -35,6 +35,13 @@ uint32_t g_nettete = 40;  // %, 0 sans
 uint32_t g_ombres_taille = 0;  // côté des textures d'ombre en pixels, 0 : celui du jeu à l'échelle du rendu
 uint32_t g_occlusion_rayon = 40;   // unités du monde (le plan proche de la caméra est à 10)
 uint32_t g_occlusion_force = 100;  // %
+// lumière et couleurs (JSRF, idées du portage Wind Waker) : appliquées à la scène finie, avant l'interface 2D
+bool g_bloom = true;
+uint32_t g_bloom_force = 30;   // %
+uint32_t g_bloom_seuil = 75;   // % de luminance à partir duquel une zone brille
+bool g_etalonnage = true;
+uint32_t g_vibrance = 15;      // %
+uint32_t g_contraste = 10;     // %
 
 namespace {
 
@@ -66,7 +73,8 @@ struct Rt {
 };
 
 constexpr int kSoftSlots = 4;  // textures d'ombre floutées par image, au plus
-enum Slot { kAo0, kAo1, kAoOut, kEdges, kWeights, kSmaaOut, kCasOut, kSoft0, kSlots = kSoft0 + kSoftSlots };
+enum Slot { kAo0, kAo1, kAoOut, kEdges, kWeights, kSmaaOut, kCasOut, kGlow0, kGlow1, kGradeOut, kSoft0, kSlots = kSoft0 + kSoftSlots };
+constexpr DXGI_FORMAT kGlowFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 // projection de la scène, prise des constantes d'un dessin de la scène
 struct Camera {
@@ -125,6 +133,12 @@ public:
     bool Bound(gpu::Context& c, const gpu::State& s, gpu::Target* rt, gpu::Target* ds, bool pretransformed) override {
         NewFrame(c.Presents());
         bool rebind = false;
+        // la scène 3D de la cible présentée finie au premier dessin 2D qui la suit : lumière et couleurs là, l'interface
+        // (bulles blanches, texte) dessinée ensuite ne brille pas
+        if (rt && !rt->depth && Main(c, *rt)) {
+            if (!pretransformed) scene3d_++;
+            else if (scene3d_ >= kMinSceneDraws && Glow(c, *rt)) rebind = true;
+        }
         if (rt && g_ombres_douces && !soft_failed_) {
             if (ShadowDraw(s, rt, ds)) {
                 if (std::find(shadows_.begin(), shadows_.end(), rt) == shadows_.end()) shadows_.push_back(rt);
@@ -207,6 +221,7 @@ public:
     }
 
     void Present(gpu::Context& c, gpu::Target& t) override {
+        if (!t.depth && scene3d_ >= kMinSceneDraws) Glow(c, t);  // une image sans interface
         if (!shadows_.empty()) Soften(c);
         if (g_occlusion && !ao_failed_ && !applied_ && scene_ == &t && draws_ >= kMinSceneDraws && cam_.ok) Occlusion(c);
         if (!t.depth) Finish(c, t);
@@ -218,6 +233,8 @@ private:
         if (f == frame_) return;
         frame_ = f;
         applied_ = false;
+        glowed_ = false;
+        scene3d_ = 0;
         scene_ = scene_ds_ = nullptr;
         draws_ = 0;
         cam_ = Camera{};
@@ -418,6 +435,66 @@ private:
     }
 
     // SMAA puis netteté : l'image finale dans la cible présentée
+    // la cible à la taille de l'image du jeu (ni texture rendue, ni ombre)
+    static bool Main(gpu::Context& c, const gpu::Target& t) {
+        uint32_t gw = 0, gh = 0;
+        c.GuestSize(gw, gh);
+        return t.gw == gw && t.gh == gh;
+    }
+
+    // bloom puis étalonnage, une fois par image : t lu, écrit dans kGradeOut, recopié dans t
+    bool Glow(gpu::Context& c, gpu::Target& t) {
+        if (glowed_ || glow_failed_ || !(g_bloom || g_etalonnage)) return false;
+        glowed_ = true;
+        uint32_t w = t.w, h = t.h, qw = std::max(1u, w / 4), qh = std::max(1u, h / 4);
+        if (!Ensure(c, kGlow0, kGlowFormat, qw, qh) || !Ensure(c, kGlow1, kGlowFormat, qw, qh) ||
+            !Ensure(c, kGradeOut, t.fmt, w, h)) {
+            glow_failed_ = true;
+            return false;
+        }
+        c.Unbind();
+        c.Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        const DXGI_FORMAT fi[3] = {t.fmt, kGlowFormat, kGlowFormat}, fg[3] = {kGlowFormat, kGlowFormat, kGlowFormat};
+        bool ok = true;
+        if (g_bloom) {
+            float kb[8] = {float(qw), float(qh), std::min(g_bloom_seuil, 100u) / 100.0f, 0.1f};
+            To(c, kGlow0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ID3D12Resource* const s0[3] = {t.res.Get(), nullptr, nullptr};
+            ok = c.Pass(kGlowHlsl, "glow_bright", kGlowFormat, View(kGlow0), qw, qh, s0, fi, kb, -1);
+            // deux tours de flou séparable, le second plus large : une lueur douce, sans bord
+            for (int pass = 0; ok && pass < 2; pass++) {
+                float step = pass ? 2.0f : 1.0f;
+                float kh[8] = {float(qw), float(qh), 0, 0, step / float(qw), 0};
+                To(c, kGlow0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                To(c, kGlow1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ID3D12Resource* const sh[3] = {rt_[kGlow0].res.Get(), nullptr, nullptr};
+                ok = c.Pass(kGlowHlsl, "glow_blur", kGlowFormat, View(kGlow1), qw, qh, sh, fg, kh, -1);
+                float kv[8] = {float(qw), float(qh), 0, 0, 0, step / float(qh)};
+                To(c, kGlow1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+                To(c, kGlow0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                ID3D12Resource* const sv[3] = {rt_[kGlow1].res.Get(), nullptr, nullptr};
+                ok = ok && c.Pass(kGlowHlsl, "glow_blur", kGlowFormat, View(kGlow0), qw, qh, sv, fg, kv, -1);
+            }
+            To(c, kGlow0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
+        if (ok) {
+            float km[8] = {float(w), float(h), g_bloom ? std::min(g_bloom_force, 200u) / 100.0f : 0.0f,
+                           g_etalonnage ? std::min(g_vibrance, 100u) / 100.0f : 0.0f,
+                           g_etalonnage ? std::min(g_contraste, 100u) / 100.0f : 0.0f};
+            To(c, kGradeOut, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ID3D12Resource* const sm[3] = {t.res.Get(), g_bloom ? rt_[kGlow0].res.Get() : nullptr, nullptr};
+            ok = c.Pass(kGlowHlsl, "glow_mix", t.fmt, View(kGradeOut), w, h, sm, fi, km, -1);
+            if (ok) CopyBack(c, t, kGradeOut);
+        }
+        if (!ok) {
+            LOGI("rendu : lumière et couleurs désactivées, un shader ou une cible n'a pas pu être fait");
+            glow_failed_ = true;
+        }
+        LOG_FIRST(1, "rendu : bloom %u %% (seuil %u %%), vibrance %u %%, contraste %u %%", g_bloom ? g_bloom_force : 0,
+                  g_bloom_seuil, g_etalonnage ? g_vibrance : 0, g_etalonnage ? g_contraste : 0);
+        return ok;
+    }
+
     void Finish(gpu::Context& c, gpu::Target& t) {
         bool smaa = g_smaa && !smaa_failed_ && Smaa(c, t);
         bool cas = g_nettete && !cas_failed_;
@@ -508,6 +585,8 @@ private:
     // l'image en cours
     uint64_t frame_ = ~0ull;
     bool applied_ = false;
+    bool glowed_ = false, glow_failed_ = false;
+    uint32_t scene3d_ = 0;  // dessins 3D de la cible présentée dans cette image
     gpu::Target* scene_ = nullptr;
     gpu::Target* scene_ds_ = nullptr;
     uint32_t draws_ = 0;

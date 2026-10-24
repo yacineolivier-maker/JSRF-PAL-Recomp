@@ -12,6 +12,8 @@ namespace game {
 // rendu.cpp
 extern bool g_smaa, g_occlusion, g_ombres_douces;
 extern uint32_t g_occlusion_rayon, g_occlusion_force, g_nettete, g_ombres_taille;
+extern bool g_bloom, g_etalonnage;
+extern uint32_t g_bloom_force, g_bloom_seuil, g_vibrance, g_contraste;
 // ecran_large.cpp
 extern bool g_ecran_large;
 // clavier_souris.cpp
@@ -61,7 +63,20 @@ void OptionsUi(double fps) {
     ImGui::Text("%.0f images par seconde", fps);
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Ombres et lumière");
+    ImGui::TextUnformatted("Lumière et couleurs");
+    ImGui::Checkbox("Halo lumineux (bloom)", &g_bloom);
+    if (g_bloom) {
+        Slider("Intensité du halo", g_bloom_force, 0, 100, "%d %%");
+        Slider("Seuil du halo", g_bloom_seuil, 40, 100, "%d %%");
+    }
+    ImGui::Checkbox("Étalonnage des couleurs", &g_etalonnage);
+    if (g_etalonnage) {
+        Slider("Vibrance", g_vibrance, 0, 60, "%d %%");
+        Slider("Contraste", g_contraste, 0, 50, "%d %%");
+    }
+    ImGui::Separator();
+
+    ImGui::TextUnformatted("Ombres et lumière (expérimental)");
     ImGui::Checkbox("Ombres douces", &g_ombres_douces);
     // prise à la création des textures d'ombre : au prochain lancement
     static const uint32_t kShadowSizes[] = {0, 512, 1024, 2048};

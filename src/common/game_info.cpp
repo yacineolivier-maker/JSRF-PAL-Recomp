@@ -14,6 +14,8 @@ void ClavierSouris(int port, input::Pad& pad);
 // rendu.cpp (repris de Conker : SMAA et netteté ; ombres douces et occlusion coupées par défaut)
 extern bool g_smaa, g_occlusion, g_ombres_douces;
 extern uint32_t g_occlusion_rayon, g_occlusion_force, g_nettete, g_ombres_taille;
+extern bool g_bloom, g_etalonnage;
+extern uint32_t g_bloom_force, g_bloom_seuil, g_vibrance, g_contraste;
 void InstallRendu();
 bool RenduKey(uint32_t vk);
 // options.cpp : panneau F1
@@ -50,6 +52,12 @@ const app::GameInfo app::kGame = {
     .missing = L"Placez le jeu dans le dossier assets : l'image disque (.iso) ou default.xbe avec ses dossiers.",
     .images = {{"default.xbe", "JSRF"}},
     .options = {{"ecran_large", &game::g_ecran_large, nullptr},
+                {"bloom", &game::g_bloom, nullptr},
+                {"bloom_force", nullptr, &game::g_bloom_force},
+                {"bloom_seuil", nullptr, &game::g_bloom_seuil},
+                {"etalonnage", &game::g_etalonnage, nullptr},
+                {"vibrance", nullptr, &game::g_vibrance},
+                {"contraste", nullptr, &game::g_contraste},
                 {"smaa", &game::g_smaa, nullptr},
                 {"nettete", nullptr, &game::g_nettete},
                 {"ombres_douces", &game::g_ombres_douces, nullptr},
