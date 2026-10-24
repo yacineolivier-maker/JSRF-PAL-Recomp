@@ -1010,6 +1010,7 @@ XInputClose                                          = 0x1C46D6  # XbSymbolDatab
 XInputGetCapabilities                                = 0x1C46E2
 XInputGetState                                       = 0x1C48D4
 XInputOpen                                           = 0x1C4661  # XbSymbolDatabase
+XInputPoll                                           = 0x1C497D  # XbSymbolDatabase
 XInputSetState                                       = 0x1C4945
 XLaunchNewImageA                                     = 0x147FE7
 XMountUtilityDrive                                   = 0x1471F6

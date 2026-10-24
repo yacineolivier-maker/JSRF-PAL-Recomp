@@ -92,6 +92,20 @@ HLE_STDCALL(XInputClose, 1) {
     return 0;
 }
 
+#ifdef HAS_XInputPoll
+// (handle): XDK 4134 titles poll before XInputGetState; the host reads the pad there, a connected port succeeds
+HLE_STDCALL(XInputPoll, 1) {
+    uint32_t port;
+    {
+        std::lock_guard<std::mutex> lock(g_ports_lock);
+        auto it = g_handles.find(a[0]);
+        if (it == g_handles.end()) return 6;  // ERROR_INVALID_HANDLE
+        port = it->second.port;
+    }
+    return input::Poll(int(port)).connected ? 0 : 1167;  // ERROR_DEVICE_NOT_CONNECTED
+}
+#endif
+
 HLE_STDCALL(XInputGetState, 2) {
     uint32_t port;
     {
