@@ -753,6 +753,14 @@ HLE_STDCALL(D3DDevice_Clear, 6) {
 HLE_STDCALL(D3DDevice_CopyRects, 5) {
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     Walk(Dev(kDevPush));  // what the title pushed itself before this call comes first
+    static const bool trace_copies = std::getenv("XBE_TRACE_COPIES") != nullptr;
+    if (trace_copies) {
+        auto src = SurfaceOf(a[0]), dst = SurfaceOf(a[3]);
+        LOG_FIRST(200, "d3d: CopyRects %08X (data %08X format %X) -> %08X (data %08X format %X), %u rects %08X points %08X: %u,%u %u,%u -> %u,%u",
+                  a[0], src.data, src.format >> 8 & 0xFF, a[3], dst.data, dst.format >> 8 & 0xFF, a[2], a[1], a[4],
+                  a[1] ? R32(a[1]) : 0, a[1] ? R32(a[1] + 4) : 0, a[1] ? R32(a[1] + 8) : 0, a[1] ? R32(a[1] + 12) : 0,
+                  a[4] ? R32(a[4]) : 0, a[4] ? R32(a[4] + 4) : 0);
+    }
     if (g_backend) g_backend->Copy(SurfaceOf(a[0]), SurfaceOf(a[3]), a[2], a[1], a[4]);
     return 0;
 }

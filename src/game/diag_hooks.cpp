@@ -42,3 +42,14 @@ X86_FUNC(sub_00193450) {
         LOGI("watch: Release %08X data %08X common %08X from %08X", res, kernel::R32(res + 4), kernel::R32(res), ret);
     __imp__sub_00193450(ctx, base);
 }
+
+// D3DDevice_CreateTexture(width, height, levels, usage, format, pool, out)
+X86_EXTERN_FUNC(__imp__sub_0018D6B0);
+X86_FUNC(sub_0018D6B0) {
+    uint32_t w = kernel::R32(ctx.esp + 4), h = kernel::R32(ctx.esp + 8), fmt = kernel::R32(ctx.esp + 0x14);
+    uint32_t out = kernel::R32(ctx.esp + 0x1C), ret = kernel::R32(ctx.esp);
+    __imp__sub_0018D6B0(ctx, base);
+    uint32_t t = out ? kernel::R32(out) : 0;
+    if (Watch() && t)
+        LOGI("watch: CreateTexture %ux%u format %X = %08X data %08X from %08X", w, h, fmt, t, kernel::R32(t + 4), ret);
+}

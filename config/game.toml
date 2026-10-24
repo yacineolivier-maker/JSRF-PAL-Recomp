@@ -808,7 +808,7 @@ crt_pow                                              = 0
 crt_sin                                              = 0
 crt_sqrt                                             = 0
 crt_tan                                              = 0
-D3D_BlockOnNonSurfaceResource                        = 0
+D3D_BlockOnNonSurfaceResource                        = 0x192270  # D3DVertexBuffer_Lock 0x19A2B9 sans NOOVERWRITE/READONLY ; attend via BlockOnTime
 D3D_BlockOnResource                                  = 0x1921F0  # XbSymbolDatabase
 D3D_BlockOnTime                                      = 0x191F00  # XbSymbolDatabase
 D3D_InitDefaultState                                 = 0x192480  # identités (SetTransform x10), états 0x39.. de la table 0x19B080, ZENABLE selon +0x2088, COLOROP[0]=4

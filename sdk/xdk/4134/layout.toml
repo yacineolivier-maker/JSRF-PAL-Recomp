@@ -48,3 +48,5 @@ EffectsImage_Desc          = 0x818 # 0x1A224B: descriptor at image + 0x818 + (Sk
 # D3DRS numbering of this XDK: 146 states, the simple ones end at 82 (D3DDevice_SetRenderStateNotInline 0x18F425
 # compares with 0x52); the runtime translates to the 4831/5849 numbering it keeps
 D3DRS_Numbering            = 4134
+# memory
+ContiguousLimit            = 0x4000000 # D3DResource_Register 0x1934BD and the texture creation mask physical addresses with 0x3FFFFFF (retail 64 MB)

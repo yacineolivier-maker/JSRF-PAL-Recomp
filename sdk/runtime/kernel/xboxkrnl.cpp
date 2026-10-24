@@ -8,6 +8,7 @@
 #include "kernel/crypto.h"
 #include "kernel/exports.h"
 #include "xbe/xbe.h"
+#include "image_symbols.h"
 
 namespace kernel {
 
@@ -370,13 +371,20 @@ static bool CoversWatch(uint32_t va, uint32_t size) {
     static const uint32_t w = std::getenv("XBE_WATCH_ADDR") ? uint32_t(std::strtoul(std::getenv("XBE_WATCH_ADDR"), nullptr, 16)) : 0;
     return w && va && w - va < size;
 }
+// a library that takes physical addresses with a retail console's 64 MB mask (XDK 4134's D3DResource_Register and
+// texture creation) needs the title's contiguous memory below it; the host's own buffers may still go higher
+#ifdef XDK_ContiguousLimit
+constexpr uint32_t kGuestHighest = XDK_ContiguousLimit - 1;
+#else
+constexpr uint32_t kGuestHighest = 0xFFFFFFFF;
+#endif
 KERNEL_EXPORT(165, MmAllocateContiguousMemory, 1) {
-    uint32_t va = mem::AllocContiguous(a[0], 0, 0xFFFFFFFF, 0);
+    uint32_t va = mem::AllocContiguous(a[0], 0, kGuestHighest, 0);
     if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemory(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
     return va;
 }
 KERNEL_EXPORT(166, MmAllocateContiguousMemoryEx, 5) {
-    uint32_t va = mem::AllocContiguous(a[0], a[1], a[2], a[3]);
+    uint32_t va = mem::AllocContiguous(a[0], a[1], std::min(a[2], kGuestHighest), a[3]);
     if (CoversWatch(va, a[0])) LOGI("watch: MmAllocateContiguousMemoryEx(%X) = %08X from %08X", a[0], va, R32(ctx.esp));
     return va;
 }
