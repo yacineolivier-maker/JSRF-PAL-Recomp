@@ -2,7 +2,10 @@
 // pixels de côté et floutées avant d'être projetées), occlusion ambiante GTAO multipliée dans la scène 3D dès qu'elle
 // est finie (avant le flou lumineux du jeu et l'interface), et SMAA sur l'image présentée. Réglages de settings.toml :
 // ombres_douces, ombres_taille, smaa, occlusion_ambiante, occlusion_rayon (unités du monde), occlusion_force (%),
-// nettete (%). F7 bascule SMAA, F8 l'occlusion, F9 les ombres douces.
+// nettete (%). Avant l'interface 2D : bloom, reflets d'objectif, rayons de lumière et étalonnage (bloom, bloom_force,
+// bloom_seuil, reflets_objectif, reflets_force, rayons_lumiere, rayons_force, etalonnage, vibrance, contraste) ; les
+// dessins additifs de la scène (particules) plus éclatants de particules_eclat (%). F7 bascule SMAA, F8 l'occlusion,
+// F9 les ombres douces.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -31,17 +34,22 @@ namespace game {
 bool g_smaa = true;
 bool g_occlusion = false;  // JSRF : pas encore validé sur ses scènes
 bool g_ombres_douces = false;  // JSRF : ses ombres ne sont pas celles de Conker
-uint32_t g_nettete = 40;  // %, 0 sans
+uint32_t g_nettete = 45;  // %, 0 sans
 uint32_t g_ombres_taille = 0;  // côté des textures d'ombre en pixels, 0 : celui du jeu à l'échelle du rendu
 uint32_t g_occlusion_rayon = 40;   // unités du monde (le plan proche de la caméra est à 10)
 uint32_t g_occlusion_force = 100;  // %
 // lumière et couleurs (JSRF, idées du portage Wind Waker) : appliquées à la scène finie, avant l'interface 2D
 bool g_bloom = true;
-uint32_t g_bloom_force = 30;   // %
-uint32_t g_bloom_seuil = 75;   // % de luminance à partir duquel une zone brille
+uint32_t g_bloom_force = 38;   // %
+uint32_t g_bloom_seuil = 72;   // % de luminance à partir duquel une zone brille
 bool g_etalonnage = true;
-uint32_t g_vibrance = 15;      // %
-uint32_t g_contraste = 10;     // %
+uint32_t g_vibrance = 18;      // %
+uint32_t g_contraste = 12;     // %
+bool g_reflets = true;          // reflets d'objectif (lens flare), tirés du flou du bloom
+uint32_t g_reflets_force = 20;  // %
+bool g_rayons = true;           // rayons de lumière (god rays) vers le barycentre des zones claires
+uint32_t g_rayons_force = 25;   // %
+uint32_t g_particules = 20;     // % d'éclat en plus des dessins additifs de la scène (étincelles, traînées), 0 sans
 
 namespace {
 
@@ -73,8 +81,22 @@ struct Rt {
 };
 
 constexpr int kSoftSlots = 4;  // textures d'ombre floutées par image, au plus
-enum Slot { kAo0, kAo1, kAoOut, kEdges, kWeights, kSmaaOut, kCasOut, kGlow0, kGlow1, kGradeOut, kSoft0, kSlots = kSoft0 + kSoftSlots };
+enum Slot {
+    kAo0, kAo1, kAoOut, kEdges, kWeights, kSmaaOut, kCasOut, kGlow0, kGlow1, kGradeOut, kSun, kSoft0,
+    kSlots = kSoft0 + kSoftSlots
+};
 constexpr DXGI_FORMAT kGlowFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+constexpr DXGI_FORMAT kSunFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
+constexpr float kSunBlend = 0.08f;    // part de l'image courante dans la lumière suivie par les rayons
+constexpr float kFlareSeuil = 0.05f;  // ce qui dépasse du flou du bloom fait des reflets
+constexpr float kRayonsSeuil = 0.25f; // luminance linéaire (0,53 à l'écran) d'où partent les rayons
+// D3DBLEND_ONE : un dessin ajouté à ce qui est déjà là (particules, traînées lumineuses)
+constexpr uint32_t kBlendOne = 0x1;
+
+// les dessins additifs de la scène rendus plus éclatants : ext.x, la part de couleur en plus, posée par dessin
+struct Eclat final : gpu::ShaderHooks {
+    std::string Output() const override { return "outc.rgb = saturate(outc.rgb * (1 + ext.x));\n"; }
+};
 
 // projection de la scène, prise des constantes d'un dessin de la scène
 struct Camera {
@@ -120,6 +142,17 @@ bool CameraFromTransform(const gpu::State& s, Camera& cam) {
 
 class Moderne final : public gpu::Extension {
 public:
+    const gpu::ShaderHooks* Shaders() const override { return &eclat_; }
+
+    // un dessin de la scène 3D (testé en profondeur) ajouté sans mélange à son fond
+    void BeginDraw(const gpu::State& s) override {
+        additif_ = s.simple[kMBlendEnable >> 2] && s.simple[kMDestBlend >> 2] == kBlendOne && s.rs[gpu::kRsZEnable];
+    }
+    void EndDraw() override { additif_ = false; }
+    void Constants(float (*)[4], float* ext, const gpu::Target* rt, uint32_t) override {
+        ext[0] = additif_ && rt && !rt->depth && rt->gw >= 320 ? std::min(g_particules, 100u) / 100.0f : 0.0f;
+    }
+
     void Reset(gpu::Context& c) override {
         for (auto& r : rt_) {
             if (r.res) c.Release(std::move(r.res));
@@ -444,11 +477,13 @@ private:
 
     // bloom puis étalonnage, une fois par image : t lu, écrit dans kGradeOut, recopié dans t
     bool Glow(gpu::Context& c, gpu::Target& t) {
-        if (glowed_ || glow_failed_ || !(g_bloom || g_etalonnage)) return false;
+        bool extra = g_reflets || g_rayons;
+        if (glowed_ || glow_failed_ || !(g_bloom || g_etalonnage || extra)) return false;
         glowed_ = true;
         uint32_t w = t.w, h = t.h, qw = std::max(1u, w / 4), qh = std::max(1u, h / 4);
+        bool sun_new = !rt_[kSun].res;
         if (!Ensure(c, kGlow0, kGlowFormat, qw, qh) || !Ensure(c, kGlow1, kGlowFormat, qw, qh) ||
-            !Ensure(c, kGradeOut, t.fmt, w, h)) {
+            !Ensure(c, kGradeOut, t.fmt, w, h) || !Ensure(c, kSun, kSunFormat, 1, 1)) {
             glow_failed_ = true;
             return false;
         }
@@ -456,8 +491,9 @@ private:
         c.Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         const DXGI_FORMAT fi[3] = {t.fmt, kGlowFormat, kGlowFormat}, fg[3] = {kGlowFormat, kGlowFormat, kGlowFormat};
         bool ok = true;
-        if (g_bloom) {
-            float kb[8] = {float(qw), float(qh), std::min(g_bloom_seuil, 100u) / 100.0f, 0.1f};
+        bool blur = g_bloom || extra;
+        if (blur) {
+            float kb[8] = {float(qw), float(qh), std::min(g_bloom_seuil, 100u) / 100.0f, 0.1f, kRayonsSeuil};
             To(c, kGlow0, D3D12_RESOURCE_STATE_RENDER_TARGET);
             ID3D12Resource* const s0[3] = {t.res.Get(), nullptr, nullptr};
             ok = c.Pass(kGlowHlsl, "glow_bright", kGlowFormat, View(kGlow0), qw, qh, s0, fi, kb, -1);
@@ -477,12 +513,34 @@ private:
             }
             To(c, kGlow0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
+        // reflets et rayons dans kGlow1, au quart de la résolution, depuis le flou des zones claires
+        if (ok && extra) {
+            const DXGI_FORMAT fe[3] = {kGlowFormat, kSunFormat, kGlowFormat};
+            if (g_rayons) {
+                To(c, kSun, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                if (sun_new) {
+                    const float none[4] = {0.5f, 0.3f, 0, 0};
+                    c.List()->ClearRenderTargetView(View(kSun), none, 0, nullptr);
+                }
+                float ks[8] = {float(qw), float(qh)};
+                ID3D12Resource* const ss[3] = {rt_[kGlow0].res.Get(), nullptr, nullptr};
+                ok = c.Pass(kGlowHlsl, "glow_sun", kSunFormat, View(kSun), 1, 1, ss, fe, ks, sun_new ? 1.0f : kSunBlend);
+                To(c, kSun, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            }
+            float ke[8] = {float(qw), float(qh), g_reflets ? std::min(g_reflets_force, 200u) / 100.0f : 0.0f,
+                           g_rayons ? std::min(g_rayons_force, 200u) / 100.0f : 0.0f, kFlareSeuil};
+            To(c, kGlow1, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ID3D12Resource* const se[3] = {rt_[kGlow0].res.Get(), rt_[kSun].res.Get(), nullptr};
+            ok = ok && c.Pass(kGlowHlsl, "glow_extra", kGlowFormat, View(kGlow1), qw, qh, se, fe, ke, -1);
+            To(c, kGlow1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        }
         if (ok) {
             float km[8] = {float(w), float(h), g_bloom ? std::min(g_bloom_force, 200u) / 100.0f : 0.0f,
                            g_etalonnage ? std::min(g_vibrance, 100u) / 100.0f : 0.0f,
-                           g_etalonnage ? std::min(g_contraste, 100u) / 100.0f : 0.0f};
+                           g_etalonnage ? std::min(g_contraste, 100u) / 100.0f : 0.0f, extra ? 1.0f : 0.0f};
             To(c, kGradeOut, D3D12_RESOURCE_STATE_RENDER_TARGET);
-            ID3D12Resource* const sm[3] = {t.res.Get(), g_bloom ? rt_[kGlow0].res.Get() : nullptr, nullptr};
+            ID3D12Resource* const sm[3] = {t.res.Get(), g_bloom ? rt_[kGlow0].res.Get() : nullptr,
+                                           extra ? rt_[kGlow1].res.Get() : nullptr};
             ok = c.Pass(kGlowHlsl, "glow_mix", t.fmt, View(kGradeOut), w, h, sm, fi, km, -1);
             if (ok) CopyBack(c, t, kGradeOut);
         }
@@ -490,8 +548,9 @@ private:
             LOGI("rendu : lumière et couleurs désactivées, un shader ou une cible n'a pas pu être fait");
             glow_failed_ = true;
         }
-        LOG_FIRST(1, "rendu : bloom %u %% (seuil %u %%), vibrance %u %%, contraste %u %%", g_bloom ? g_bloom_force : 0,
-                  g_bloom_seuil, g_etalonnage ? g_vibrance : 0, g_etalonnage ? g_contraste : 0);
+        LOG_FIRST(1, "rendu : bloom %u %% (seuil %u %%), reflets %u %%, rayons %u %%, particules +%u %%, vibrance %u %%, "
+                  "contraste %u %%", g_bloom ? g_bloom_force : 0, g_bloom_seuil, g_reflets ? g_reflets_force : 0,
+                  g_rayons ? g_rayons_force : 0, g_particules, g_etalonnage ? g_vibrance : 0, g_etalonnage ? g_contraste : 0);
         return ok;
     }
 
@@ -586,6 +645,8 @@ private:
     uint64_t frame_ = ~0ull;
     bool applied_ = false;
     bool glowed_ = false, glow_failed_ = false;
+    bool additif_ = false;  // le dessin en cours, vu par BeginDraw
+    Eclat eclat_;
     uint32_t scene3d_ = 0;  // dessins 3D de la cible présentée dans cette image
     gpu::Target* scene_ = nullptr;
     gpu::Target* scene_ds_ = nullptr;

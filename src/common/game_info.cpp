@@ -16,11 +16,17 @@ extern bool g_smaa, g_occlusion, g_ombres_douces;
 extern uint32_t g_occlusion_rayon, g_occlusion_force, g_nettete, g_ombres_taille;
 extern bool g_bloom, g_etalonnage;
 extern uint32_t g_bloom_force, g_bloom_seuil, g_vibrance, g_contraste;
+extern bool g_reflets, g_rayons;
+extern uint32_t g_reflets_force, g_rayons_force, g_particules;
 void InstallRendu();
 bool RenduKey(uint32_t vk);
 // options.cpp : panneau F1
 bool OptionsKey(uint32_t vk);
 void OptionsUi(double fps);
+
+// rendu à 175 % de la hauteur de l'écran par défaut (150 dans le SDK), avant la lecture de settings.toml : la scène
+// de JSRF est légère, le suréchantillonnage en plus affine ses contours cel-shadés
+[[maybe_unused]] const bool kRenduParDefaut = (app::Get().render_percent = 175, true);
 
 void Pad(int port, input::Pad& pad) {
     AutoPad(port, pad);
@@ -58,6 +64,11 @@ const app::GameInfo app::kGame = {
                 {"etalonnage", &game::g_etalonnage, nullptr},
                 {"vibrance", nullptr, &game::g_vibrance},
                 {"contraste", nullptr, &game::g_contraste},
+                {"reflets_objectif", &game::g_reflets, nullptr},
+                {"reflets_force", nullptr, &game::g_reflets_force},
+                {"rayons_lumiere", &game::g_rayons, nullptr},
+                {"rayons_force", nullptr, &game::g_rayons_force},
+                {"particules_eclat", nullptr, &game::g_particules},
                 {"smaa", &game::g_smaa, nullptr},
                 {"nettete", nullptr, &game::g_nettete},
                 {"ombres_douces", &game::g_ombres_douces, nullptr},

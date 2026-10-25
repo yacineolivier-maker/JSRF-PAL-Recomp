@@ -2867,7 +2867,9 @@ void D3D12Backend::BlitFrame(Target& t) {
     cl_->RSSetViewports(1, &vp);
     cl_->RSSetScissorRects(1, &scissor);
     Transition(t.res.Get(), t.state, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_});
+    // a supersampled frame averages every texel under each output pixel: one bilinear tap skips some past 2x2
+    uint32_t taps = uint32_t(std::ceil(std::max(float(t.h) / vh, 1.0f) - kTapsSlack));
+    Blit(t.res.Get(), t.fmt, uv, {.gamma = gamma_, .taps = taps});
 }
 
 void D3D12Backend::RenderUi() {

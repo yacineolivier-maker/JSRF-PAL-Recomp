@@ -241,12 +241,14 @@ inline constexpr char kSmaaBlendVs[] = "SmaaBlendV vs(uint id : SV_VertexID) { r
 }  // namespace game
 
 // Lumière et couleurs (idées du portage Wind Waker) : bloom sur la luminance (le ciel et les couleurs saturées ne
-// brillent pas), flou au quart de la résolution, ajouté en lumière linéaire ; puis vibrance et courbe en S. Le noir et
+// brillent pas), flou au quart de la résolution, ajouté en lumière linéaire avec les reflets d'objectif et les rayons
+// de lumière tirés du même flou ; puis vibrance et courbe en S. Le noir et
 // le blanc restent en place : le dessin cel-shadé garde ses aplats.
 inline constexpr char kGlowHlsl[] = R"(
 cbuffer C : register(b1) { float4 k0; float4 k1; };
 Texture2D img : register(t0);
 Texture2D glow : register(t1);
+Texture2D extra : register(t2);
 SamplerState LinearSampler : register(s0);
 float4 vs(uint id : SV_VertexID) : SV_Position {
     float2 t = float2((id << 1) & 2, id & 2);
@@ -254,7 +256,8 @@ float4 vs(uint id : SV_VertexID) : SV_Position {
 }
 float3 Lin(float3 c) { return pow(saturate(c), 2.2); }
 float Luma(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)); }
-// k0 : taille de sortie, seuil, genou ; 4 lectures bilinéaires couvrent les 4x4 pixels de l'image
+// k0 : taille de sortie, seuil, genou ; k1.x : seuil des rayons. 4 lectures bilinéaires couvrent les 4x4 pixels de
+// l'image ; l'alpha garde ce qui dépasse le seuil des rayons (le ciel, les lumières), flou avec le reste
 float4 glow_bright(float4 pos : SV_Position) : SV_Target {
     float2 uv = pos.xy / k0.xy, d = 0.25 / k0.xy;
     float3 s = 0;
@@ -268,26 +271,102 @@ float4 glow_bright(float4 pos : SV_Position) : SV_Target {
     float soft = clamp(l - k0.z + knee, 0, 2 * knee);
     soft = soft * soft / (4 * knee);
     float w = max(soft, l - k0.z) / max(l, 1e-4);
-    return float4(s * w, 1);
+    return float4(s * w, max(Luma(s) - k1.x, 0));
 }
 // k0 : taille, k1.xy : pas en uv (un axe)
 float4 glow_blur(float4 pos : SV_Position) : SV_Target {
     float2 uv = pos.xy / k0.xy;
     static const float wt[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
-    float3 s = img.SampleLevel(LinearSampler, uv, 0).rgb * wt[0];
+    float4 s = img.SampleLevel(LinearSampler, uv, 0) * wt[0];
     [unroll] for (int i = 1; i < 5; i++) {
         float2 o = k1.xy * (i * 1.5);
-        s += img.SampleLevel(LinearSampler, uv + o, 0).rgb * wt[i];
-        s += img.SampleLevel(LinearSampler, uv - o, 0).rgb * wt[i];
+        s += img.SampleLevel(LinearSampler, uv + o, 0) * wt[i];
+        s += img.SampleLevel(LinearSampler, uv - o, 0) * wt[i];
     }
-    return float4(s, 1);
+    return s;
 }
-// k0 : taille, force du bloom, vibrance ; k1.x : contraste
+// la lumière d'ensemble pour les rayons : barycentre des zones claires de l'alpha du flou (le haut de l'image, où est
+// le ciel, compte plus), leur part de l'image et leur concentration, sur une grille de 32x18. Une cible de 1x1, mêlée à celle des
+// images d'avant : les rayons ne sautent pas d'une image à l'autre
+float4 glow_sun(float4 pos : SV_Position) : SV_Target {
+    float4 acc = 0;
+    [loop] for (int y = 0; y < 18; y++) {
+        [loop] for (int x = 0; x < 32; x++) {
+            float2 uv = (float2(x, y) + 0.5) / float2(32, 18);
+            float w = img.SampleLevel(LinearSampler, uv, 0).a * (1.5 - uv.y);
+            acc += float4(uv * w, dot(uv, uv) * w, w);
+        }
+    }
+    if (acc.w < 1e-4) return float4(0.5, 0.3, 0, 0);
+    float2 c = acc.xy / acc.w;
+    float spread = max(acc.z / acc.w - dot(c, c), 0);  // 0,17 quand tout l'écran brille
+    return float4(c, acc.w / (32 * 18), saturate(1 - spread * 4));
+}
+// k0 : taille du quart, force des reflets d'objectif, force des rayons ; k1.x : seuil des reflets ; glow : glow_sun
+float3 Flare(float2 uv, float2 dir) {
+    if (any(uv < 0) || any(uv > 1)) return 0;
+    // frange colorée : rouge et bleu pris de part et d'autre le long de l'axe
+    float2 d = dir * 0.006;
+    float3 c = float3(img.SampleLevel(LinearSampler, uv + d, 0).r, img.SampleLevel(LinearSampler, uv, 0).g,
+                      img.SampleLevel(LinearSampler, uv - d, 0).b);
+    return max(c - k1.x, 0);
+}
+float4 glow_extra(float4 pos : SV_Position) : SV_Target {
+    float2 uv = pos.xy / k0.xy;
+    float3 o = 0;
+    if (k0.z > 0) {
+        // reflets d'objectif (pseudo lens flare de John Chapman) : images fantômes des zones claires renvoyées par le
+        // centre de l'image, plus faibles au bord, et un anneau de halo
+        float2 tc = 1 - uv;
+        float2 axis = 0.5 - tc;
+        float len = length(axis);
+        float2 dir = len > 1e-4 ? axis / len : float2(0, 0);
+        float2 gv = axis * 0.42;
+        static const float3 tint[4] = {float3(1, 0.8, 0.55), float3(0.6, 0.85, 1), float3(0.85, 1, 0.7), float3(1, 0.6, 0.9)};
+        float3 f = 0;
+        [unroll] for (int i = 0; i < 4; i++) {
+            float2 g = tc + gv * i;
+            float w = pow(1 - saturate(length(0.5 - g) / 0.7071), 5);
+            f += Flare(g, dir) * w * tint[i];
+        }
+        float2 h = tc + dir * 0.42;
+        float hw = pow(1 - saturate(length(0.5 - h) / 0.7071), 5);
+        f += Flare(h, dir) * hw * float3(0.9, 0.95, 1);
+        o += f * (k0.z * 1.5);
+    }
+    if (k0.w > 0) {
+        // rayons de lumière (god rays) : flou radial de l'alpha (les zones claires) vers le barycentre de la lumière,
+        // d'autant plus marqués qu'elle est concentrée, tramé pour ne pas faire de marches
+        float4 sun = glow.Load(int3(0, 0, 0));
+        float amt = k0.w * saturate(sun.z * 20) * sun.w;
+        if (amt > 1e-3) {
+            float2 d = (uv - sun.xy) * (0.9 / 24);
+            float n = frac(52.9829189 * frac(dot(pos.xy, float2(0.06711056, 0.00583715))));
+            float2 s = uv - d * n;
+            float r = 0;
+            float decay = 1;
+            [loop] for (int i = 0; i < 24; i++) {
+                r += img.SampleLevel(LinearSampler, s, 0).a * decay;
+                s -= d;
+                decay *= 0.94;
+            }
+            float fall = 1 - saturate(length((uv - sun.xy) * float2(k0.x / k0.y, 1)) * 0.8);
+            o += float3(1, 0.97, 0.9) * (r * amt * 0.25 * fall);
+        }
+    }
+    return float4(o, 1);
+}
+// k0 : taille, force du bloom, vibrance ; k1.x : contraste, k1.y : 1 avec les reflets et rayons (extra)
 float4 glow_mix(float4 pos : SV_Position) : SV_Target {
     float2 uv = pos.xy / k0.xy;
     float4 c4 = img.Load(int3(pos.xy, 0));
     float3 c = c4.rgb;
-    if (k0.z > 0) c = pow(saturate(Lin(c) + glow.SampleLevel(LinearSampler, uv, 0).rgb * k0.z), 1 / 2.2);
+    if (k0.z > 0 || k1.y > 0) {
+        float3 l = Lin(c);
+        if (k0.z > 0) l += glow.SampleLevel(LinearSampler, uv, 0).rgb * k0.z;
+        if (k1.y > 0) l += extra.SampleLevel(LinearSampler, uv, 0).rgb * k1.y;
+        c = pow(saturate(l), 1 / 2.2);
+    }
     float y = Luma(c);
     float sat = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
     c = lerp(float3(y, y, y), c, 1 + k0.w * (1 - sat));

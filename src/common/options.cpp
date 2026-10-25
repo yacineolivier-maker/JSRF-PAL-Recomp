@@ -14,6 +14,8 @@ extern bool g_smaa, g_occlusion, g_ombres_douces;
 extern uint32_t g_occlusion_rayon, g_occlusion_force, g_nettete, g_ombres_taille;
 extern bool g_bloom, g_etalonnage;
 extern uint32_t g_bloom_force, g_bloom_seuil, g_vibrance, g_contraste;
+extern bool g_reflets, g_rayons;
+extern uint32_t g_reflets_force, g_rayons_force, g_particules;
 // ecran_large.cpp
 extern bool g_ecran_large;
 // clavier_souris.cpp
@@ -69,6 +71,11 @@ void OptionsUi(double fps) {
         Slider("Intensité du halo", g_bloom_force, 0, 100, "%d %%");
         Slider("Seuil du halo", g_bloom_seuil, 40, 100, "%d %%");
     }
+    ImGui::Checkbox("Reflets d'objectif (lens flare)", &g_reflets);
+    if (g_reflets) Slider("Intensité des reflets", g_reflets_force, 0, 100, "%d %%");
+    ImGui::Checkbox("Rayons de lumière", &g_rayons);
+    if (g_rayons) Slider("Intensité des rayons", g_rayons_force, 0, 100, "%d %%");
+    Slider("Éclat des particules", g_particules, 0, 100, "+%d %%");
     ImGui::Checkbox("Étalonnage des couleurs", &g_etalonnage);
     if (g_etalonnage) {
         Slider("Vibrance", g_vibrance, 0, 60, "%d %%");
