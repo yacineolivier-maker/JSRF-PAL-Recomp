@@ -67,5 +67,8 @@ inline std::atomic<bool> g_capture{false};
 // a game's wide screen: pretransformed draws on the main target that do not span its width have their screen x
 // pulled toward its centre by this factor (4:3 HUD on a wider frame); 1 leaves them
 inline std::atomic<float> g_hud_x_scale{1.0f};
+// width over height of the presented frame as the game draws it (a game's own wide screen, or 4:3 with it off);
+// 0 leaves 16:9 or 4:3 by the console's display flag
+inline std::atomic<float> g_present_aspect{0.0f};
 
 }  // namespace gpu

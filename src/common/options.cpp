@@ -34,6 +34,10 @@ void Slider(const char* label, uint32_t& v, int lo, int hi, const char* fmt) {
     if (ImGui::SliderInt(label, &x, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp)) v = uint32_t(x);
 }
 
+// le texte du panneau dans la langue du jeu : français, sinon anglais
+bool g_fr = true;
+const char* T(const char* fr, const char* en) { return g_fr ? fr : en; }
+
 // un choix parmi des valeurs fixes
 void Choice(const char* label, uint32_t& v, const uint32_t* values, const char* const* names, int n) {
     int at = 0;
@@ -56,87 +60,88 @@ bool OptionsKey(uint32_t vk) {
 void OptionsUi(double fps) {
     if (!g_open) return;
     app::Settings& s = app::Get();
+    g_fr = s.language == "francais";
     ImGui::SetNextWindowPos(ImVec2(48, 48), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Options graphiques (F1)", &g_open, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::Begin(T("Options graphiques (F1)###options", "Graphics options (F1)###options"), &g_open, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::End();
         return;
     }
     ImGui::SetWindowFontScale(1.6f);
-    ImGui::Text("%.0f images par seconde", fps);
+    ImGui::Text(T("%.0f images par seconde", "%.0f frames per second"), fps);
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Lumière et couleurs");
-    ImGui::Checkbox("Halo lumineux (bloom)", &g_bloom);
+    ImGui::TextUnformatted(T("Lumière et couleurs", "Light and colour"));
+    ImGui::Checkbox(T("Halo lumineux (bloom)", "Bloom"), &g_bloom);
     if (g_bloom) {
-        Slider("Intensité du halo", g_bloom_force, 0, 100, "%d %%");
-        Slider("Seuil du halo", g_bloom_seuil, 40, 100, "%d %%");
+        Slider(T("Intensité du halo", "Bloom strength"), g_bloom_force, 0, 100, "%d %%");
+        Slider(T("Seuil du halo", "Bloom threshold"), g_bloom_seuil, 40, 100, "%d %%");
     }
-    ImGui::Checkbox("Reflets d'objectif (lens flare)", &g_reflets);
-    if (g_reflets) Slider("Intensité des reflets", g_reflets_force, 0, 100, "%d %%");
-    ImGui::Checkbox("Rayons de lumière", &g_rayons);
-    if (g_rayons) Slider("Intensité des rayons", g_rayons_force, 0, 100, "%d %%");
-    Slider("Éclat des particules", g_particules, 0, 100, "+%d %%");
-    ImGui::Checkbox("Étalonnage des couleurs", &g_etalonnage);
+    ImGui::Checkbox(T("Reflets d'objectif (lens flare)", "Lens flare"), &g_reflets);
+    if (g_reflets) Slider(T("Intensité des reflets", "Lens flare strength"), g_reflets_force, 0, 100, "%d %%");
+    ImGui::Checkbox(T("Rayons de lumière", "Light shafts"), &g_rayons);
+    if (g_rayons) Slider(T("Intensité des rayons", "Light shaft strength"), g_rayons_force, 0, 100, "%d %%");
+    Slider(T("Éclat des particules", "Particle glow"), g_particules, 0, 100, "+%d %%");
+    ImGui::Checkbox(T("Étalonnage des couleurs", "Colour grading"), &g_etalonnage);
     if (g_etalonnage) {
-        Slider("Vibrance", g_vibrance, 0, 60, "%d %%");
-        Slider("Contraste", g_contraste, 0, 50, "%d %%");
+        Slider(T("Vibrance", "Vibrance"), g_vibrance, 0, 60, "%d %%");
+        Slider(T("Contraste", "Contrast"), g_contraste, 0, 50, "%d %%");
     }
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Ombres et lumière (expérimental)");
-    ImGui::Checkbox("Ombres douces", &g_ombres_douces);
+    ImGui::TextUnformatted(T("Ombres et lumière (expérimental)", "Shadows and lighting (experimental)"));
+    ImGui::Checkbox(T("Ombres douces", "Soft shadows"), &g_ombres_douces);
     // prise à la création des textures d'ombre : au prochain lancement
     static const uint32_t kShadowSizes[] = {0, 512, 1024, 2048};
-    static const char* const kShadowSizeNames[] = {"Celle du jeu", "512", "1024", "2048"};
-    Choice("Taille des ombres (relancer)", g_ombres_taille, kShadowSizes, kShadowSizeNames, int(std::size(kShadowSizes)));
-    ImGui::Checkbox("Occlusion ambiante (GTAO)", &g_occlusion);
+    const char* const kShadowSizeNames[] = {T("Celle du jeu", "Game default"), "512", "1024", "2048"};
+    Choice(T("Taille des ombres (relancer)", "Shadow size (restart)"), g_ombres_taille, kShadowSizes, kShadowSizeNames, int(std::size(kShadowSizes)));
+    ImGui::Checkbox(T("Occlusion ambiante (GTAO)", "Ambient occlusion (GTAO)"), &g_occlusion);
     if (g_occlusion) {
-        Slider("Portée", g_occlusion_rayon, 5, 200, "%d");
-        Slider("Intensité", g_occlusion_force, 0, 200, "%d %%");
+        Slider(T("Portée", "Radius"), g_occlusion_rayon, 5, 200, "%d");
+        Slider(T("Intensité", "Strength"), g_occlusion_force, 0, 200, "%d %%");
     }
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Image");
-    ImGui::Checkbox("Anticrénelage SMAA", &g_smaa);
-    Slider("Netteté", g_nettete, 0, 100, "%d %%");
+    ImGui::TextUnformatted(T("Image", "Picture"));
+    ImGui::Checkbox(T("Anticrénelage SMAA", "SMAA anti-aliasing"), &g_smaa);
+    Slider(T("Netteté", "Sharpening"), g_nettete, 0, 100, "%d %%");
     static const uint32_t kAniso[] = {0, 2, 4, 8, 16};
-    static const char* const kAnisoNames[] = {"Au choix du jeu", "2x", "4x", "8x", "16x"};
-    Choice("Filtrage anisotrope", s.aniso, kAniso, kAnisoNames, int(std::size(kAniso)));
-    Slider("Résolution du rendu", s.render_percent, 50, 200, "%d %%");
+    const char* const kAnisoNames[] = {T("Au choix du jeu", "Game default"), "2x", "4x", "8x", "16x"};
+    Choice(T("Filtrage anisotrope", "Anisotropic filtering"), s.aniso, kAniso, kAnisoNames, int(std::size(kAniso)));
+    Slider(T("Résolution du rendu", "Render resolution"), s.render_percent, 50, 200, "%d %%");
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Affichage");
-    ImGui::Checkbox("Écran large (16:9 et plus, champ élargi)", &g_ecran_large);
+    ImGui::TextUnformatted(T("Affichage", "Display"));
+    ImGui::Checkbox(T("Écran large (16:9 et plus, champ élargi)", "Widescreen (16:9 and wider, wider view)"), &g_ecran_large);
     static const char* const kLangues[] = {"anglais", "francais", "allemand", "espagnol", "italien"};
     static const char* const kLanguesNoms[] = {"English", "Français", "Deutsch", "Español", "Italiano"};
     int langue = 1;
     for (int i = 0; i < 5; i++)
         if (s.language == kLangues[i]) langue = i;
-    if (ImGui::Combo("Langue du jeu (relancer)", &langue, kLanguesNoms, 5)) s.language = kLangues[langue];
-    ImGui::Checkbox("Synchronisation verticale", &s.vsync);
+    if (ImGui::Combo(T("Langue du jeu (relancer)", "Game language (restart)"), &langue, kLanguesNoms, 5)) s.language = kLangues[langue];
+    ImGui::Checkbox(T("Synchronisation verticale", "Vertical sync"), &s.vsync);
     static const uint32_t kCaps[] = {30, 60, 120, 144, app::kFpsCapRefresh, 0};
-    static const char* const kCapNames[] = {"30", "60", "120", "144", "Écran", "Sans limite"};  // Écran : juste sous sa fréquence
-    Choice("Images par seconde au plus", s.fps_cap, kCaps, kCapNames, int(std::size(kCaps)));
+    const char* const kCapNames[] = {"30", "60", "120", "144", T("Écran", "Display"), T("Sans limite", "Unlimited")};  // Écran : juste sous sa fréquence
+    Choice(T("Images par seconde au plus", "Frame rate cap"), s.fps_cap, kCaps, kCapNames, int(std::size(kCaps)));
     ImGui::Separator();
 
-    ImGui::TextUnformatted("Commandes");
-    ImGui::Checkbox("Clavier et souris (manette 1)", &g_clavier_souris);
+    ImGui::TextUnformatted(T("Commandes", "Controls"));
+    ImGui::Checkbox(T("Clavier et souris (manette 1)", "Keyboard and mouse (controller 1)"), &g_clavier_souris);
     if (g_clavier_souris) {
-        Slider("Sensibilité de la souris", g_souris_sensibilite, 10, 400, "%d %%");
-        ImGui::Checkbox("Inverser la souris verticalement", &g_souris_inverser_y);
-        ImGui::TextDisabled("Touches : table [clavier_souris] de settings.toml");
+        Slider(T("Sensibilité de la souris", "Mouse sensitivity"), g_souris_sensibilite, 10, 400, "%d %%");
+        ImGui::Checkbox(T("Inverser la souris verticalement", "Invert mouse Y"), &g_souris_inverser_y);
+        ImGui::TextDisabled("%s", T("Touches : table [clavier_souris] de settings.toml", "Keys: [clavier_souris] table in settings.toml"));
     }
     ImGui::Separator();
 
-    if (ImGui::Button("Enregistrer")) {
+    if (ImGui::Button(T("Enregistrer", "Save"))) {
         app::Save();
-        g_saved = "Réglages enregistrés dans settings.toml";
+        g_saved = T("Réglages enregistrés dans settings.toml", "Settings saved to settings.toml");
         g_saved_until = ImGui::GetTime() + 3;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Fermer")) g_open = false;
+    if (ImGui::Button(T("Fermer", "Close"))) g_open = false;
     if (g_saved && ImGui::GetTime() < g_saved_until) ImGui::TextUnformatted(g_saved);
-    ImGui::TextDisabled("F7 SMAA, F8 occlusion, F9 ombres douces");
+    ImGui::TextDisabled("%s", T("F7 SMAA, F8 occlusion, F9 ombres douces", "F7 SMAA, F8 occlusion, F9 soft shadows"));
     ImGui::End();
 }
 

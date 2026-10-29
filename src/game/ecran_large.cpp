@@ -14,10 +14,12 @@ bool g_ecran_large = true;
 }
 
 namespace {
-// largeur de la sortie sur hauteur, 4:3 au moins ; 0 quand l'écran large est coupé
+// largeur de la sortie sur hauteur, 4:3 au moins ; 0 quand l'écran large est coupé. L'image est présentée dans ce
+// rapport : toute la largeur d'un écran 21:9 avec l'écran large, un cadre 4:3 avec bandes noires sans lui
 float WideAspect() {
     if (!game::g_ecran_large || !app::Widescreen()) {
         gpu::g_hud_x_scale = 1.0f;
+        gpu::g_present_aspect = 4.0f / 3.0f;
         return 0;
     }
     const app::Mode out = app::Output();
@@ -25,6 +27,7 @@ float WideAspect() {
     wide = wide < 4.0f / 3.0f ? 4.0f / 3.0f : wide;
     // l'interface 2D garde ses proportions : ramenée au cadre 4:3 du centre
     gpu::g_hud_x_scale = (4.0f / 3.0f) / wide;
+    gpu::g_present_aspect = wide;
     return wide;
 }
 }  // namespace

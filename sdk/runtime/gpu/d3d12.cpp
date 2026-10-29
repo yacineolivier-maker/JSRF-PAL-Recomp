@@ -2854,9 +2854,9 @@ void D3D12Backend::UploadGammaRamp() {
 }
 
 void D3D12Backend::BlitFrame(Target& t) {
-    // 16:9 when the console reports a widescreen display, else 4:3
-    bool wide = app::Widescreen();
-    float aspect = wide ? 16.0f / 9.0f : 4.0f / 3.0f;
+    // the game's own aspect when it sets one, else 16:9 when the console reports a widescreen display, else 4:3
+    float aspect = g_present_aspect.load(std::memory_order_relaxed);
+    if (aspect <= 0) aspect = app::Widescreen() ? 16.0f / 9.0f : 4.0f / 3.0f;
     float w = float(bb_w_);
     float h = float(bb_h_);
     float vw = std::min(w, h * aspect);
